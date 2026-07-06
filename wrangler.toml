@@ -1,0 +1,24 @@
+name = "miami-stories-doj-api"
+main = "apps/worker/src/index.ts"
+compatibility_date = "2026-06-21"
+workers_dev = true
+
+# No production route is attached in the copied Miami project yet.
+# Add the final Miami API domain only after Cloudflare project, D1, OAuth, and Discord values are confirmed.
+
+# Replace database_id after running:
+# wrangler d1 create miami-stories-doj-db
+
+[[d1_databases]]
+binding = "DB"
+database_name = "miami-stories-doj-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[vars]
+PUBLIC_APP_URL = "https://miami-stories-doj.pages.dev"
+WORKER_APP_URL = "https://miami-stories-doj-api.example"
+DISCORD_CLIENT_ID = "REPLACE_WITH_MIAMI_DISCORD_CLIENT_ID"
+DISCORD_GUILD_ID = "REPLACE_WITH_MIAMI_DISCORD_GUILD_ID"
+DISCORD_REDIRECT_URI = "https://miami-stories-doj-api.example/api/auth/discord/callback"
+LEGACY_BAR_EXAM_URL = ""
+BOOTSTRAP_ADMIN_DISCORD_IDS = ""

@@ -1,0 +1,23 @@
+/dashboard/*
+  X-Robots-Tag: noindex, nofollow
+
+/auth/*
+  X-Robots-Tag: noindex, nofollow
+
+/login
+  X-Robots-Tag: noindex, nofollow
+
+/logout
+  X-Robots-Tag: noindex, nofollow
+
+/unauthorized
+  X-Robots-Tag: noindex, nofollow
+
+/requests/*
+  X-Robots-Tag: noindex, nofollow
+
+/bar-exam
+  X-Robots-Tag: noindex, nofollow
+
+/bar-exam/*
+  X-Robots-Tag: noindex, nofollow

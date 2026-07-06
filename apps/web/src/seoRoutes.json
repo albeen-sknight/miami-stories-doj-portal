@@ -1,0 +1,135 @@
+[
+  {
+    "path": "/",
+    "title": "Miami Stories Department of Justice",
+    "description": "Official Miami Stories DOJ Portal for legal resources, public docket information, attorney records, DOJ services, and Department of Justice notices.",
+    "changefreq": "weekly",
+    "priority": 1.0
+  },
+  {
+    "path": "/resources",
+    "title": "Legal Resources | Miami Stories DOJ",
+    "description": "Published Miami Stories DOJ resources, procedures, templates, training materials, and public legal reference documents.",
+    "changefreq": "weekly",
+    "priority": 0.9
+  },
+  {
+    "path": "/faq",
+    "title": "FAQ | Miami Stories DOJ",
+    "description": "Search public Miami Stories DOJ frequently asked questions about warrants, subpoenas, Bar licensing, civil cases, expungements, and court procedure.",
+    "changefreq": "weekly",
+    "priority": 0.9
+  },
+  {
+    "path": "/docket",
+    "title": "Public Docket | Miami Stories DOJ",
+    "description": "View published Miami Stories DOJ docket notices, scheduled proceedings, public case references, and judicial record updates.",
+    "changefreq": "daily",
+    "priority": 0.9
+  },
+  {
+    "path": "/lawyers",
+    "title": "Bar Association Registry | Miami Stories DOJ",
+    "description": "Find public attorney profiles, authorized legal practitioners, and judicial officers listed by the Miami Stories DOJ.",
+    "changefreq": "weekly",
+    "priority": 0.85
+  },
+  {
+    "path": "/services",
+    "title": "DOJ Services | Miami Stories DOJ",
+    "description": "Access Miami Stories DOJ public service routes for counsel requests, court filings, subpoenas, warrants, expungements, marriage certificates, and divorce records.",
+    "changefreq": "weekly",
+    "priority": 0.9
+  },
+  {
+    "path": "/services/lawyer",
+    "title": "Defense Counsel Request | Miami Stories DOJ",
+    "description": "Request public defender, defense counsel, or private-practitioner support through the Miami Stories Department of Justice intake.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/criminal-trial",
+    "title": "Court Hearing Request | Miami Stories DOJ",
+    "description": "Submit a public intake request for Miami Stories criminal hearing coordination and court scheduling review.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/civil-case",
+    "title": "Civil Claim | Miami Stories DOJ",
+    "description": "Submit a Miami Stories DOJ civil claim request with the required filing information and document link.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/subpoena",
+    "title": "Subpoena Request | Miami Stories DOJ",
+    "description": "Request Miami Stories DOJ review of subpoena materials for testimony, records, digital evidence, or related process.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/warrant",
+    "title": "Warrant Request | Miami Stories DOJ",
+    "description": "Submit a Miami Stories DOJ arrest warrant request for judicial review of probable cause and supporting facts.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/search-seizure",
+    "title": "Search and Seizure Review | Miami Stories DOJ",
+    "description": "Submit a Miami Stories DOJ search and seizure warrant request with defined target, evidence, and probable cause information.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/expungement",
+    "title": "Expungement Request | Miami Stories DOJ",
+    "description": "Request Miami Stories DOJ expungement review and record-relief processing through the public service intake.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/marriage",
+    "title": "Marriage Certificate Review | Miami Stories DOJ",
+    "description": "Request Miami Stories DOJ marriage certificate review, recordkeeping, and certificate processing.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/services/divorce",
+    "title": "Divorce Review | Miami Stories DOJ",
+    "description": "Request Miami Stories DOJ divorce or legal separation record processing through public service intake.",
+    "changefreq": "monthly",
+    "priority": 0.7
+  },
+  {
+    "path": "/legal",
+    "title": "Legal Notice | Miami Stories DOJ",
+    "description": "Legal notice, ownership information, proprietary restrictions, and real-world legal disclaimer for the Miami Stories DOJ Portal.",
+    "changefreq": "yearly",
+    "priority": 0.45
+  },
+  {
+    "path": "/privacy",
+    "title": "Privacy Policy | Miami Stories DOJ",
+    "description": "Privacy policy for Miami Stories DOJ Portal authentication, role data, records, service requests, and administrative use.",
+    "changefreq": "yearly",
+    "priority": 0.45
+  },
+  {
+    "path": "/cookies",
+    "title": "Cookie Policy | Miami Stories DOJ",
+    "description": "Cookie policy for essential authentication, session, and security cookies used by the Miami Stories DOJ Portal.",
+    "changefreq": "yearly",
+    "priority": 0.45
+  },
+  {
+    "path": "/terms",
+    "title": "Terms of Use | Miami Stories DOJ",
+    "description": "Terms of use for Miami Stories DOJ Portal access, public records, protected areas, and authorized administrative use.",
+    "changefreq": "yearly",
+    "priority": 0.45
+  }
+]

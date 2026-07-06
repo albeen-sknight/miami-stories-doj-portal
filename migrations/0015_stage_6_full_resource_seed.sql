@@ -1,0 +1,26 @@
+INSERT INTO resource_documents (id, title, category, version, url, description, is_public, sort_order, updated_at) VALUES
+('charter-rights', 'Charter and Declaration of Rights', 'LEGAL_AUTHORITY', 'v1.0', 'https://docs.google.com/document/d/1iwj52akac2ctqS7vF3L01aaSQTVsz4qQhRuU4B-avu8/edit?usp=sharing', 'Foundational rights document for Miami Stories legal authority and protected rights.', 1, 10, CURRENT_TIMESTAMP),
+('sources-of-law', 'Sources of Law', 'LEGAL_AUTHORITY', 'v1.0', 'https://docs.google.com/document/d/1YoMANNUPte9UsS_c2mqqYBQG7dZnCkznyaObvIDMa4o/edit', 'Recognized hierarchy and sources of law used by the DOJ.', 1, 20, CURRENT_TIMESTAMP),
+('master-penal-code', 'Master Penal Code', 'LEGAL_AUTHORITY', 'v1.0', 'https://docs.google.com/spreadsheets/d/1MIzJyh0acUGM53-vwQ9tnx5qYWfwlnaPvlmEIbJShic/edit?usp=sharing', 'Master Penal Code reference for criminal charges and classifications.', 1, 30, CURRENT_TIMESTAMP),
+('doj-interpretations', 'DOJ Interpretations', 'DOJ_PROCEDURE', 'v1.0', 'https://docs.google.com/document/d/1F6jsSghsG5b48SwBFfV--Ou837h2jgZaE-QGQ13ades/edit?usp=sharing', 'Official DOJ interpretation guidance for procedures and legal standards.', 1, 40, CURRENT_TIMESTAMP),
+('doj-sop', 'DOJ Standard Operating Procedure', 'DOJ_PROCEDURE', 'v1.0', 'https://docs.google.com/document/d/1k9i0XFuigdLe-jGlYYHp5w23mxvuYgs1KitEFWIP884/edit?usp=sharing', 'Standard Operating Procedure for DOJ operations, ethics, evidence, and court workflow.', 1, 50, CURRENT_TIMESTAMP),
+('structure-governance', 'DOJ Structure and Governance Model', 'ORGANIZATION_REGULATION', 'v1.0', 'https://docs.google.com/document/d/1H6FMrTQrGG2mXa-5DpvPzGRQ6RnGaVLLElySgUvw1vo/edit?usp=sharing', 'DOJ hierarchy, branches, authority, and governance model.', 1, 60, CURRENT_TIMESTAMP),
+('firearms-licensing', 'Firearms Licensing Guidelines', 'ORGANIZATION_REGULATION', 'v1.1', 'https://docs.google.com/document/d/1xY7EHJtZH7XAwIcRE8nGFejzdbKbAg66OVVzNh0HIT8/edit?usp=sharing', 'Guidelines for firearms licensing, review standards, and administrative requirements.', 1, 70, CURRENT_TIMESTAMP),
+('attorney-handbook', 'Attorney Training and Practice Handbook', 'ATTORNEY_TRAINING', 'v1.1', 'https://docs.google.com/document/d/1pEf85SFSXhcstil41CjM08QgLp1rL_Fnsf6SOwdg6ng/edit?usp=sharing', 'Training and practice handbook for attorneys, public defenders, prosecutors, and Bar candidates.', 1, 80, CURRENT_TIMESTAMP),
+('resource-guide', 'DOJ Resources Portal Complete Guide', 'FAQ', 'v1.0', 'https://docs.google.com/document/d/1SDBioLlv9tFqZxJpHfubHMNRtmtwpvi54PaW4FVZYBo/edit?usp=drivesdk', 'Complete legacy DOJ resources portal reference document.', 1, 90, CURRENT_TIMESTAMP),
+('civil-case-template', 'Civil Claim Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1QJrKqGkk8kg_DwyM2eHZQGQbrTbv9MhciUWfNJj8Zys/edit?usp=sharing', 'Template for filing a Miami Stories civil claim.', 1, 100, CURRENT_TIMESTAMP),
+('subpoena-template', 'Subpoena Request Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1q29NqE0Qyt_vFRbbjjjI-lvJQnDOjkw8RnBngeThigk/edit?usp=sharing', 'Template for requesting a subpoena for testimony, records, or evidence.', 1, 110, CURRENT_TIMESTAMP),
+('arrest-warrant-template', 'Warrant Request Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1pxrO2_reBG5p-txAI8h8ipgBZXQqb_wS3j4NXb75tWE/edit?usp=sharing', 'Template for requesting Miami Stories warrant review.', 1, 120, CURRENT_TIMESTAMP),
+('search-seizure-template', 'Search and Seizure Review Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1VoF1wJW9RwrQ5BiD8EnpYX7AtjFxQ_Z2hxmNZDYKAi4/edit?usp=sharing', 'Template for requesting Miami Stories search and seizure review.', 1, 130, CURRENT_TIMESTAMP),
+('expungement-template', 'Expungement Request Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1ulbN1y152M8sKnSsotZmM7zJUWO0p1QySUvJ1UtsFik/edit?usp=sharing', 'Template for filing or requesting an expungement.', 1, 140, CURRENT_TIMESTAMP),
+('marriage-script-template', 'Marriage Officiation Script Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1tp7AUS-YNIEj9rgim6DG4IfkbLnQJP1BlMSIylt_OVA/edit?usp=sharing', 'Template/script for marriage officiation ceremonies.', 1, 150, CURRENT_TIMESTAMP),
+('marriage-certificate-template', 'Marriage Certificate Template', 'TEMPLATES', 'v1.0', 'https://docs.google.com/document/d/1HvTZUS91APs-8zukUqMWK8MCU86FVwZLFjEkdrPmqKw/edit?usp=sharing', 'Template for issuing marriage certificates.', 1, 160, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET
+  title = excluded.title,
+  category = excluded.category,
+  version = excluded.version,
+  url = excluded.url,
+  description = excluded.description,
+  is_public = excluded.is_public,
+  sort_order = excluded.sort_order,
+  updated_at = CURRENT_TIMESTAMP;

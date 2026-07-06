@@ -1,0 +1,27 @@
+{
+  "name": "miami-stories-doj-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Miami Stories DOJ Portal - Cloudflare full-stack roleplay Department of Justice platform.",
+  "scripts": {
+    "dev": "pnpm --parallel dev",
+    "dev:web": "pnpm --filter @shotta-doj/web dev",
+    "dev:worker": "pnpm --filter @shotta-doj/worker dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write .",
+    "generate:sitemap": "node scripts/generate-sitemap.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply miami-stories-doj-db --local",
+    "db:migrate:prod": "wrangler d1 migrations apply miami-stories-doj-db --remote",
+    "seed:faq": "node scripts/seed-faq.mjs",
+    "seed:bar-exam": "node scripts/seed-bar-exam.mjs",
+    "register:discord-commands": "node scripts/register-discord-commands.mjs"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.103.0"
+  }
+}

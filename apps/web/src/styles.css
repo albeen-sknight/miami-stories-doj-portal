@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #06111f;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  overflow-x: clip;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255, 47, 174, 0.16), transparent 32rem),
+    radial-gradient(circle at 82% 8%, rgba(32, 240, 255, 0.14), transparent 30rem),
+    #06111f;
+}
+
+#root {
+  min-width: 320px;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+input,
+textarea,
+select,
+button {
+  max-width: 100%;
+}
+
+input,
+textarea,
+select {
+  color-scheme: dark;
+}
+
+@layer components {
+  .field {
+    @apply w-full max-w-full rounded-md border border-white/10 bg-ink px-3 py-2 outline-none focus:border-gold;
+  }
+}
