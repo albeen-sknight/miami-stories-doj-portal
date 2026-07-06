@@ -16,13 +16,13 @@ database_id = "ab4e1ef7-512d-456d-893f-e9dbf642331a"
 
 [vars]
 PUBLIC_APP_URL = "https://miami-stories-doj.pages.dev"
-WORKER_APP_URL = "https://miami-stories-doj-api.YOUR_WORKERS_SUBDOMAIN.workers.dev"
+WORKER_APP_URL = "https://miami-stories-doj-api.natsu-dragneel13576.workers.dev"
 
 DISCORD_CLIENT_ID = "1523825761843417259"
 DISCORD_PUBLIC_KEY = "26032bf8b46fd28b0867c477bb95bd215a6bdd80eb0c303a484d63ce17db2746"
 DISCORD_GUILD_ID = "1395614223366754396"
 
-DISCORD_REDIRECT_URI = "https://miami-stories-doj-api.YOUR_WORKERS_SUBDOMAIN.workers.dev/api/auth/discord/callback"
+DISCORD_REDIRECT_URI = "https://miami-stories-doj-api.natsu-dragneel13576.workers.dev/api/auth/discord/callback"
 
 LEGACY_BAR_EXAM_URL = ""
-BOOTSTRAP_ADMIN_DISCORD_IDS = "YOUR_DISCORD_USER_ID"
+BOOTSTRAP_ADMIN_DISCORD_IDS = "893998974648860742"
