@@ -12,7 +12,7 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "miami-stories-doj-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "ab4e1ef7-512d-456d-893f-e9dbf642331a"
 
 [vars]
 PUBLIC_APP_URL = "https://miami-stories-doj.pages.dev"
