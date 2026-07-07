@@ -80,7 +80,7 @@ const yesNo = ["yes", "no"];
 const templateConfirms: ServiceField[] = [
   { name: "confirmCopy", label: "I made a copy of the template", kind: "checkbox", required: true },
   { name: "confirmRenamed", label: "I renamed it correctly", kind: "checkbox", required: true },
-{ name: "confirmReviewerAccess", label: "I will share the completed document only with the assigned DOJ reviewer, court official, or authorized party", kind: "checkbox", required: true }
+{ name: "confirmEditorPermissions", label: "I will share the completed document only with the assigned DOJ reviewer, court official, or authorized party", kind: "checkbox", required: true }
 ];
 
 function withTemplate(fields: ServiceField[]) {
