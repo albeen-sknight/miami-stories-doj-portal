@@ -1224,9 +1224,9 @@ const formEl = event.currentTarget;
 const formData = new FormData(formEl);
 const payload = Object.fromEntries(formData.entries()) as Record<string, unknown>;
 
-for (const field of config.fields) {
+for (const field of formConfig.fields) {
   if (field.kind === "checkbox") {
-    const input = formEl.elements.namedItem(field.name) as HTMLInputElement | null;
+    const input = form.elements.namedItem(field.name) as HTMLInputElement | null;
     payload[field.name] = Boolean(input?.checked);
   }
 }
