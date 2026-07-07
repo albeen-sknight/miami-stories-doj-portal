@@ -1220,8 +1220,16 @@ function ServiceForm() {
     submitInFlight.current = true;
     setSubmitting(true);
     setError(null);
-    const formData = new FormData(form);
-    const payload: Record<string, string | boolean> = {};
+const formEl = event.currentTarget;
+const formData = new FormData(formEl);
+const payload = Object.fromEntries(formData.entries()) as Record<string, unknown>;
+
+for (const field of config.fields) {
+  if (field.kind === "checkbox") {
+    const input = formEl.elements.namedItem(field.name) as HTMLInputElement | null;
+    payload[field.name] = Boolean(input?.checked);
+  }
+}
     for (const field of formConfig.fields) {
       if (field.kind === "checkbox") payload[field.name] = formData.get(field.name) === "on";
       else payload[field.name] = String(formData.get(field.name) ?? "");
