@@ -1224,10 +1224,9 @@ const formData = new FormData(form);
 const payload = Object.fromEntries(formData.entries()) as Record<string, unknown>;
 
 for (const field of formConfig.fields) {
-if (field.kind === "checkbox") {
-  payload[field.name] = formData.has(field.name);
-} else {
-  payload[field.name] = String(formData.get(field.name) ?? "");
+  if (field.kind === "checkbox") {
+    const input = form.elements.namedItem(field.name) as HTMLInputElement | null;
+    payload[field.name] = Boolean(input?.checked);
   }
 }
 try {

@@ -85,7 +85,7 @@ export const SERVICE_DEFINITIONS: Record<ServiceRequestType, ServiceDefinition> 
     requiredFields: ["caseNumber", "defendantName", "charges", "probableCauseSummary"],
     mainPartyField: "defendantName",
     shortTitleFields: ["defendantName", "caseNumber"],
-    confirmFields: ["confirmAccurateTimely"]
+    confirmFields: ["confirmAccurateTimely"],
   },
   SEARCH_SEIZURE_WARRANT: {
     type: "SEARCH_SEIZURE_WARRANT",
