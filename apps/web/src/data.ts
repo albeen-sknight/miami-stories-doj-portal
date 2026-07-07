@@ -80,7 +80,7 @@ const yesNo = ["yes", "no"];
 const templateConfirms: ServiceField[] = [
   { name: "confirmCopy", label: "I made a copy of the template", kind: "checkbox", required: true },
   { name: "confirmRenamed", label: "I renamed it correctly", kind: "checkbox", required: true },
-  { name: "confirmEditorPermissions", label: "Permissions are Anyone with the link -> Editor", kind: "checkbox", required: true }
+{ name: "confirmReviewerAccess", label: "I will share the completed document only with the assigned DOJ reviewer, court official, or authorized party", kind: "checkbox", required: true }
 ];
 
 function withTemplate(fields: ServiceField[]) {
@@ -140,7 +140,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Court Proceedings",
     prefix: "CIV",
     icon: BriefcaseBusiness,
-    templateUrl: "https://docs.google.com/document/d/1QJrKqGkk8kg_DwyM2eHZQGQbrTbv9MhciUWfNJj8Zys/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1MVUojNjPTDrG_l-AtyROAwfKPVjdH4AMX9PTRa12DAQ/edit?usp=sharing",
     who: "Parties or attorneys filing Miami Stories civil claims using the DOJ civil case template.",
     prepare: ["Make a copy of the template", "Rename it PLAINTIFF vs. DEFENDANT - CIVIL CASE", "Set permissions to Anyone with the link -> Editor", "Label exhibits Exhibit A, Exhibit B, Exhibit C"],
     guidance: ["Incomplete filings may be delayed, returned for correction, or dismissed."],
@@ -165,7 +165,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Warrants and Subpoenas",
     prefix: "SUB",
     icon: FileSearch,
-    templateUrl: "https://docs.google.com/document/d/1q29NqE0Qyt_vFRbbjjjI-lvJQnDOjkw8RnBngeThigk/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1I7uMAKgacOVe2tMUJjBdfFcpGLetO759/edit?usp=sharing&ouid=104604696646852685726&rtpof=true&sd=true",
     who: "Parties requesting specific testimony, records, objects, digital evidence, inspections, or similar process.",
     prepare: ["Make a copy of the template", "Rename it CASE SUBJECT - SUBPOENA REQUEST - PERSON OR EVIDENCE REQUESTED", "Set permissions to Anyone with the link -> Editor"],
     guidance: ["Be specific and reasonably limited. Broad, irrelevant, privileged, untimely, or unsupported requests may be modified, returned, or denied."],
@@ -189,7 +189,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Warrants and Subpoenas",
     prefix: "AWR",
     icon: FileCheck,
-    templateUrl: "https://docs.google.com/document/d/1pxrO2_reBG5p-txAI8h8ipgBZXQqb_wS3j4NXb75tWE/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1VyaUeEYW_Qi9-Uq1_hJWbQymk5uGf-43sApC194umKY/edit?usp=sharing",
     who: "Law enforcement, prosecutors, or authorized legal actors requesting judicial review of an arrest warrant.",
     prepare: ["Use the arrest warrant template when available", "List each offense clearly", "Explain probable cause for each charge", "Avoid duplicative charge stacking without separate legal basis"],
     guidance: ["Probable cause, targets, and evidence links are sent only to the private warrant ticket channel."],
@@ -209,7 +209,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Warrants and Subpoenas",
     prefix: "SWR",
     icon: FileCheck,
-    templateUrl: "https://docs.google.com/document/d/1VoF1wJW9RwrQ5BiD8EnpYX7AtjFxQ_Z2hxmNZDYKAi4/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1QjPrM-HwM_iTtya9GA2yZXMoemHE5F5p/edit?usp=sharing&ouid=104604696646852685726&rtpof=true&sd=true",
     who: "Law enforcement, prosecutors, or authorized legal actors requesting search and seizure review for defined targets and evidence.",
     prepare: ["Make a copy of the template", "Rename it TARGET NAME OR LOCATION - SEARCH WARRANT REQUEST", "Set permissions to Anyone with the link -> Editor", "Write facts, not conclusions"],
     guidance: ["Target locations, probable cause, evidence links, and document links are never posted publicly."],
@@ -230,7 +230,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Records and Certificates",
     prefix: "EXP",
     icon: BookOpen,
-    templateUrl: "https://docs.google.com/document/d/1ulbN1y152M8sKnSsotZmM7zJUWO0p1QySUvJ1UtsFik/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/163J63l40zr13BBe9EvkJlqhe0uCnortnMZH9xgCL-IQ/edit?usp=sharing",
     who: "Applicants or attorneys requesting discretionary record relief after meeting eligibility expectations.",
     prepare: ["Make a copy of the petition", "Rename it FULL NAME - EXPUNGEMENT PETITION", "Set permissions to Anyone with the link -> Editor"],
     guidance: ["Expungement is discretionary and not guaranteed. DOJ processing target is 7 working days after approval and payment."],
@@ -254,7 +254,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Records and Certificates",
     prefix: "MAR",
     icon: HeartHandshake,
-    templateUrl: "https://docs.google.com/document/d/1HvTZUS91APs-8zukUqMWK8MCU86FVwZLFjEkdrPmqKw/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1ZZ9opbwLaXYpVLM_ocfFrwK-oMpzeVmj1-kgiNul4Jg/edit?usp=sharing",
     who: "Spouses or authorized officiants requesting DOJ review and certificate issuance.",
     prepare: ["Names and Citizen IDs for both spouses", "Ceremony details", "Witness details if known", "Certificate document link if already prepared"],
     guidance: ["DOJ staff verifies information, drafts/reviews internally, and delivers the certificate in the private channel."],
