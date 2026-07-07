@@ -137,7 +137,7 @@ const SITE_URL = "https://miami-stories-doj.pages.dev";
 const SITE_NAME = "Miami Stories Department of Justice";
 const DEFAULT_DESCRIPTION =
   "Florida-inspired legal services, court administration, Bar licensing, and public justice resources for Miami Stories RP.";
-const SOCIAL_IMAGE_URL = `${SITE_URL}/og-image.png`;
+const SOCIAL_IMAGE_URL = `${SITE_URL}/miami-og-image.png`;
 
 type SeoRoute = {
   path: string;
@@ -4843,3 +4843,4 @@ function dashboardTitle(path: string) {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" / ");
 }
+
