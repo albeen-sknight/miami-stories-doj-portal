@@ -380,12 +380,12 @@ function Home() {
               </a>
             </div>
             <div className="mt-8 max-w-4xl rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 p-4 text-sm leading-6 text-fuchsia-100 shadow-[0_0_24px_rgba(236,72,153,0.18)]">
-  <strong className="text-fuchsia-300">Website under construction:</strong>{" "}
-  The Miami Stories DOJ portal is currently being built and reviewed. Public resources,
-  service forms, templates, docket tools, and legal references may be incomplete or subject to change.
-  This site reflects Miami Stories RP procedures and Florida-inspired RP law only. It is not
-  real-world legal advice.
-</div>
+              <strong className="text-fuchsia-300">Website under construction:</strong>{" "}
+              The Miami Stories DOJ portal is currently being built and reviewed. Public resources,
+              service forms, templates, docket tools, and legal references may be incomplete or subject to change.
+              This site reflects Miami Stories RP procedures and Florida-inspired RP law only. It is not
+              real-world legal advice.
+            </div>
           </div>
         </div>
 
