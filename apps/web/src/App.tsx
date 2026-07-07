@@ -652,6 +652,13 @@ function Resources() {
   return (
     <>
       <PageHeader eyebrow="Resources" title="Published legal resources" description="Review Miami Stories DOJ procedures, Florida-inspired RP legal standards, courtroom expectations, Bar requirements, and public filing guidance." />
+      <div className="mb-6 rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 p-4 text-sm text-fuchsia-100 shadow-[0_0_24px_rgba(236,72,153,0.18)]">
+  <strong className="text-fuchsia-300">Website under construction:</strong>{" "}
+  Miami Stories DOJ resources are currently being drafted and reviewed. Published documents,
+  templates, procedures, and legal references may be incomplete, outdated, or subject to change.
+  This portal reflects Miami Stories RP procedures and Florida-inspired RP law only. It is not
+  real-world legal advice.
+</div>
       <Content>{loading ? <LoadingState /> : error ? <ErrorState message={error.message} /> : (
         <div className="space-y-8">
           {data?.source === "seed" ? <Badge>Seed fallback</Badge> : <Badge>D1 records</Badge>}
