@@ -130,7 +130,7 @@ import { dashboardRoutes, divisions, requestForms, serviceCards, serviceGroups }
 import { useAsync } from "./hooks";
 import seoRoutes from "./seoRoutes.json";
 
-const DISCORD_INVITE_URL = "https://discord.gg/sYt6JWAdx7";
+const DISCORD_INVITE_URL = "https://discord.gg/4f5Ga4RVVR";
 const DISCORD_GUILD_ID = import.meta.env.VITE_DISCORD_GUILD_ID || "REPLACE_WITH_MIAMI_DISCORD_GUILD_ID";
 const DISCORD_RESOURCE_CHANNEL_ID = import.meta.env.VITE_DISCORD_RESOURCE_CHANNEL_ID || "";
 const SITE_URL = "https://miami-stories-doj.pages.dev";
