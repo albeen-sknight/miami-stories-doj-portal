@@ -359,7 +359,7 @@ function Home() {
   return (
     <>
       <section className="relative min-h-[620px] overflow-hidden border-b border-white/10 sm:min-h-[680px]">
-        <img src="/hero-background.webp" alt="" fetchPriority="high" className="absolute inset-0 h-full w-full object-cover opacity-55" />
+        <img src="/hero-background.png" alt="" fetchPriority="high" className="absolute inset-0 h-full w-full object-cover opacity-55" />
         <div className="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-black/25" />
         <div className="relative mx-auto flex min-h-[620px] max-w-7xl flex-col justify-center px-4 py-16 sm:min-h-[680px] sm:px-6 sm:py-20 lg:px-8">
           <div className="max-w-4xl min-w-0">
