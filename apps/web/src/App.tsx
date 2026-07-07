@@ -1220,8 +1220,7 @@ function ServiceForm() {
     submitInFlight.current = true;
     setSubmitting(true);
     setError(null);
-const formEl = event.currentTarget;
-const formData = new FormData(formEl);
+const formData = new FormData(form);
 const payload = Object.fromEntries(formData.entries()) as Record<string, unknown>;
 
 for (const field of formConfig.fields) {
@@ -1230,25 +1229,22 @@ for (const field of formConfig.fields) {
     payload[field.name] = Boolean(input?.checked);
   }
 }
-    for (const field of formConfig.fields) {
-      if (field.kind === "checkbox") payload[field.name] = formData.get(field.name) === "on";
-      else payload[field.name] = String(formData.get(field.name) ?? "");
-    }
-    try {
-      const result = await createServiceRequest({
-        requestType: formConfig.type,
-        payload,
-        requesterContact: String(payload.preferredContactMethod ?? payload.contactInfo ?? ""),
-        documentUrl: String(payload.documentUrl ?? "")
-      });
-      setSubmitted({
-        id: result.data.id,
-        requestNumber: result.data.requestNumber,
-        discordTicketStatus: result.data.discordTicketStatus,
-        createdAt: result.data.createdAt
-      });
-      form.reset();
-    } catch (cause) {
+
+try {
+  const result = await createServiceRequest({
+    requestType: formConfig.type,
+    payload,
+    requesterContact: String(payload.preferredContactMethod ?? payload.contactInfo ?? ""),
+    documentUrl: String(payload.documentUrl ?? "")
+  });
+  setSubmitted({
+    id: result.data.id,
+    requestNumber: result.data.requestNumber,
+    discordTicketStatus: result.data.discordTicketStatus,
+    createdAt: result.data.createdAt
+  });
+  form.reset();
+} catch (cause) {
       setError(cause instanceof Error ? cause.message : "Submission failed.");
     } finally {
       submitInFlight.current = false;
