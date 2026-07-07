@@ -82,7 +82,7 @@ export const SERVICE_DEFINITIONS: Record<ServiceRequestType, ServiceDefinition> 
     categoryKey: "WARRANTS_CATEGORY",
     discordWorkflow: "PRIVATE_TICKET",
     templateUrl: "https://docs.google.com/document/d/1pxrO2_reBG5p-txAI8h8ipgBZXQqb_wS3j4NXb75tWE/edit?usp=sharing",
-    requiredFields: ["caseNumber", "defendantName", "charges", "probableCauseSummary", "confirmAccurateTimely"],
+    requiredFields: ["caseNumber", "defendantName", "charges", "probableCauseSummary"],
     mainPartyField: "defendantName",
     shortTitleFields: ["defendantName", "caseNumber"],
     confirmFields: ["confirmAccurateTimely"]
