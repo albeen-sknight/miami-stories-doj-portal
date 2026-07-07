@@ -1283,11 +1283,17 @@ function ServiceForm() {
                 {config.fields.map((field) => (
                   <label key={field.name} className="grid gap-2 text-sm font-medium text-zinc-200">
                     {field.kind === "checkbox" ? (
-                      <span className="flex gap-3 rounded-md border border-white/10 bg-black p-3">
-                        <input name={field.name} type="checkbox" required={field.required} className="mt-1" />
-                        {field.label}
-                      </span>
-                    ) : (
+                    <span className="flex gap-3 rounded-md border border-white/10 bg-black p-3">
+                <input
+                name={field.name}
+                type="checkbox"
+                value="true"
+                required={field.required}
+               className="mt-1"
+    />
+    {field.label}
+  </span>
+) : (
                       <>
                         {field.label}
                         {field.kind === "textarea" ? (
