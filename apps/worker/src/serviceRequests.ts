@@ -758,89 +758,48 @@ async function pingRoleIds(env: Env, detail: ServiceRequestDetail): Promise<stri
 }
 
 async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestMentions> {
-
-  const requesterDiscordId =
-
-    detail.submittedByDiscordId ||
-
-    ctx.user?.discordId ||
-
-    ctx.discordId ||
-
-    "";
-
-
-
-  const roleIds: string[] = [];
-
-
-
-  if (detail.serviceType === "LAWYER") {
-
-    const preferred = String(detail.payload.preferredRepresentation ?? "").toLowerCase();
-
-
-
-    const publicDefenderRoleId = "1395614223861678160";
-
-    const privatePractitionerRoleId = "1395614223861678159";
-
-
-
-    if (preferred.includes("public defender")) {
-
-      roleIds.push(publicDefenderRoleId);
-
-    } else if (preferred.includes("private")) {
-
-      roleIds.push(privatePractitionerRoleId);
-
-    } else {
-
-      roleIds.push(publicDefenderRoleId, privatePractitionerRoleId);
-
-    }
-
-
-
-    return {
-
-      userIds: requesterDiscordId ? [requesterDiscordId] : [],
-
-      roleIds: Array.from(new Set(roleIds)),
-
-    };
-
-  }
-
-
-
-  return {
-
-    userIds: requesterDiscordId ? [requesterDiscordId] : [],
-
-    roleIds: [],
-
-  };
-
-}
-
-
-
-async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestMentions> {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
-  const requesterDiscordId = validDiscordId(detail.requesterDiscordId) ? detail.requesterDiscordId : validDiscordId(ctx.user.discordId) ? ctx.user.discordId : null;
+
+  const requesterDiscordId = validDiscordId(detail.requesterDiscordId)
+    ? detail.requesterDiscordId
+    : validDiscordId(ctx.user.discordId)
+      ? ctx.user.discordId
+      : null;
+
   if (requesterDiscordId) userIds.add(requesterDiscordId);
 
+  if (detail.requestType === "LAWYER") {
+    const preferred = String(detail.payload.preferredRepresentation ?? "").toLowerCase();
+
+    const publicDefenderRoleId = await roleIdByName(env, "Public Defender");
+    const privatePractitionerRoleId = await roleIdByName(env, "Private Practitioner");
+
+    if (preferred.includes("public defender")) {
+      if (publicDefenderRoleId) roleIds.add(publicDefenderRoleId);
+    } else if (preferred.includes("private")) {
+      if (privatePractitionerRoleId) roleIds.add(privatePractitionerRoleId);
+    } else {
+      if (publicDefenderRoleId) roleIds.add(publicDefenderRoleId);
+      if (privatePractitionerRoleId) roleIds.add(privatePractitionerRoleId);
+    }
+
+    return {
+      userIds: [...userIds],
+      roleIds: [...roleIds]
+    };
+  }
+
   for (const id of await servicePingRoleIds(env, detail)) roleIds.add(id);
+
   const lawyerDiscordId = await resolveLawyerDiscordId(env, detail.payload);
   if (lawyerDiscordId) userIds.add(lawyerDiscordId);
+
   return {
     userIds: [...userIds],
     roleIds: [...roleIds]
   };
-}?
+}
 
 function canAssignJudge(ctx: AuthContext): boolean {
   return canAssignAnyJudge(ctx) ||
@@ -1295,3 +1254,4 @@ function isGoogleDocsUrl(value: string): boolean {
 function safeError(cause: unknown): string {
   return cause instanceof Error ? cause.message.slice(0, 180) : "Unknown error";
 }
+
