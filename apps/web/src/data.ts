@@ -140,7 +140,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Court Proceedings",
     prefix: "CIV",
     icon: BriefcaseBusiness,
-templateUrl: "https://docs.google.com/document/d/1MVUojNjPTDrG_l-AtyROAwfKPVjdH4AMX9PTRa12DAQ/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1R9qLC1au8b5ri0OZRv41jnmIMiTPETbyHRaIKLiR6R8/edit?usp=sharing",
     who: "Parties or attorneys filing Miami Stories civil claims using the DOJ civil case template.",
     prepare: ["Make a copy of the template", "Rename it PLAINTIFF vs. DEFENDANT - CIVIL CASE", "Set permissions to Anyone with the link -> Editor", "Label exhibits Exhibit A, Exhibit B, Exhibit C"],
     guidance: ["Incomplete filings may be delayed, returned for correction, or dismissed."],
@@ -165,7 +165,7 @@ templateUrl: "https://docs.google.com/document/d/1MVUojNjPTDrG_l-AtyROAwfKPVjdH4
     group: "Warrants and Subpoenas",
     prefix: "SUB",
     icon: FileSearch,
-templateUrl: "https://docs.google.com/document/d/1I7uMAKgacOVe2tMUJjBdfFcpGLetO759/edit?usp=sharing&ouid=104604696646852685726&rtpof=true&sd=true",
+templateUrl: "https://docs.google.com/document/d/1wytrLiS_3Aj7Ve9UOe7hf5_B__xN46qmp0HY3ry8HWk/edit?usp=sharing",
     who: "Parties requesting specific testimony, records, objects, digital evidence, inspections, or similar process.",
     prepare: ["Make a copy of the template", "Rename it CASE SUBJECT - SUBPOENA REQUEST - PERSON OR EVIDENCE REQUESTED", "Set permissions to Anyone with the link -> Editor"],
     guidance: ["Be specific and reasonably limited. Broad, irrelevant, privileged, untimely, or unsupported requests may be modified, returned, or denied."],
@@ -189,7 +189,7 @@ templateUrl: "https://docs.google.com/document/d/1I7uMAKgacOVe2tMUJjBdfFcpGLetO7
     group: "Warrants and Subpoenas",
     prefix: "AWR",
     icon: FileCheck,
-templateUrl: "https://docs.google.com/document/d/1VyaUeEYW_Qi9-Uq1_hJWbQymk5uGf-43sApC194umKY/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1bS2RHhE6gu93rdDNRmm2IejJRmMEMmhL1foKoMTb2-o/edit?usp=sharing",
     who: "Law enforcement, prosecutors, or authorized legal actors requesting judicial review of an arrest warrant.",
     prepare: ["Use the arrest warrant template when available", "List each offense clearly", "Explain probable cause for each charge", "Avoid duplicative charge stacking without separate legal basis"],
     guidance: ["Probable cause, targets, and evidence links are sent only to the private warrant ticket channel."],
@@ -209,7 +209,7 @@ templateUrl: "https://docs.google.com/document/d/1VyaUeEYW_Qi9-Uq1_hJWbQymk5uGf-
     group: "Warrants and Subpoenas",
     prefix: "SWR",
     icon: FileCheck,
-templateUrl: "https://docs.google.com/document/d/1QjPrM-HwM_iTtya9GA2yZXMoemHE5F5p/edit?usp=sharing&ouid=104604696646852685726&rtpof=true&sd=true",
+templateUrl: "https://docs.google.com/document/d/16z1LOsOib_QBqbq8cbR1oLEj6rpfsIOAeoGLGNsq88U/edit?usp=sharing",
     who: "Law enforcement, prosecutors, or authorized legal actors requesting search and seizure review for defined targets and evidence.",
     prepare: ["Make a copy of the template", "Rename it TARGET NAME OR LOCATION - SEARCH WARRANT REQUEST", "Set permissions to Anyone with the link -> Editor", "Write facts, not conclusions"],
     guidance: ["Target locations, probable cause, evidence links, and document links are never posted publicly."],
@@ -230,7 +230,7 @@ templateUrl: "https://docs.google.com/document/d/1QjPrM-HwM_iTtya9GA2yZXMoemHE5F
     group: "Records and Certificates",
     prefix: "EXP",
     icon: BookOpen,
-templateUrl: "https://docs.google.com/document/d/163J63l40zr13BBe9EvkJlqhe0uCnortnMZH9xgCL-IQ/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/1Mo3ZfAB2UsfqqUQ0fqyylhSzYLEQYX-ReKsQ2YANPWw/edit?usp=sharing",
     who: "Applicants or attorneys requesting discretionary record relief after meeting eligibility expectations.",
     prepare: ["Make a copy of the petition", "Rename it FULL NAME - EXPUNGEMENT PETITION", "Set permissions to Anyone with the link -> Editor"],
     guidance: ["Expungement is discretionary and not guaranteed. DOJ processing target is 7 working days after approval and payment."],
@@ -254,7 +254,7 @@ templateUrl: "https://docs.google.com/document/d/163J63l40zr13BBe9EvkJlqhe0uCnor
     group: "Records and Certificates",
     prefix: "MAR",
     icon: HeartHandshake,
-templateUrl: "https://docs.google.com/document/d/1ZZ9opbwLaXYpVLM_ocfFrwK-oMpzeVmj1-kgiNul4Jg/edit?usp=sharing",
+templateUrl: "https://docs.google.com/document/d/17L5lsoakMuEyJEBL-wQZAQg0qFLyx1WNY6JJOTjoNrw/edit?usp=sharing",
     who: "Spouses or authorized officiants requesting DOJ review and certificate issuance.",
     prepare: ["Names and Citizen IDs for both spouses", "Ceremony details", "Witness details if known", "Certificate document link if already prepared"],
     guidance: ["DOJ staff verifies information, drafts/reviews internally, and delivers the certificate in the private channel."],
@@ -321,3 +321,4 @@ export const serviceCards = Object.values(serviceFormDefinitions).map((service) 
 }));
 
 export const requestForms = serviceFormDefinitions;
+
