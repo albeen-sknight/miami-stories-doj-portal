@@ -827,7 +827,7 @@ async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: Servic
 
 
 
-replaces async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestMentions> {
+async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestMentions> {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
   const requesterDiscordId = validDiscordId(detail.requesterDiscordId) ? detail.requesterDiscordId : validDiscordId(ctx.user.discordId) ? ctx.user.discordId : null;
