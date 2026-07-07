@@ -758,6 +758,76 @@ async function pingRoleIds(env: Env, detail: ServiceRequestDetail): Promise<stri
 }
 
 async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestMentions> {
+
+  const requesterDiscordId =
+
+    detail.submittedByDiscordId ||
+
+    ctx.user?.discordId ||
+
+    ctx.discordId ||
+
+    "";
+
+
+
+  const roleIds: string[] = [];
+
+
+
+  if (detail.serviceType === "LAWYER") {
+
+    const preferred = String(detail.payload.preferredRepresentation ?? "").toLowerCase();
+
+
+
+    const publicDefenderRoleId = "1395614223861678160";
+
+    const privatePractitionerRoleId = "1395614223861678159";
+
+
+
+    if (preferred.includes("public defender")) {
+
+      roleIds.push(publicDefenderRoleId);
+
+    } else if (preferred.includes("private")) {
+
+      roleIds.push(privatePractitionerRoleId);
+
+    } else {
+
+      roleIds.push(publicDefenderRoleId, privatePractitionerRoleId);
+
+    }
+
+
+
+    return {
+
+      userIds: requesterDiscordId ? [requesterDiscordId] : [],
+
+      roleIds: Array.from(new Set(roleIds)),
+
+    };
+
+  }
+
+
+
+  return {
+
+    userIds: requesterDiscordId ? [requesterDiscordId] : [],
+
+    roleIds: [],
+
+  };
+
+}
+
+
+
+replaces async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestMentions> {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
   const requesterDiscordId = validDiscordId(detail.requesterDiscordId) ? detail.requesterDiscordId : validDiscordId(ctx.user.discordId) ? ctx.user.discordId : null;
@@ -766,12 +836,11 @@ async function serviceRequestMentions(env: Env, ctx: AuthContext, detail: Servic
   for (const id of await servicePingRoleIds(env, detail)) roleIds.add(id);
   const lawyerDiscordId = await resolveLawyerDiscordId(env, detail.payload);
   if (lawyerDiscordId) userIds.add(lawyerDiscordId);
-
   return {
     userIds: [...userIds],
     roleIds: [...roleIds]
   };
-}
+}?
 
 function canAssignJudge(ctx: AuthContext): boolean {
   return canAssignAnyJudge(ctx) ||
