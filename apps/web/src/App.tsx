@@ -104,6 +104,7 @@ import {
   fetchTicketTranscript,
   fetchTicketTranscripts,
   importAdminFaq,
+  linkAdminProfileDiscord,
   logout as logoutApi,
   markAdminProfileInactive,
   markBarExamAttempt,
@@ -121,6 +122,7 @@ import {
   scoreBarExamAttempt,
   searchJudicialHistory,
   startBarExam,
+  syncAdminProfiles,
   submitBarExam,
   unpublishAdminFaq,
   unpublishAdminResource,
@@ -186,7 +188,7 @@ export function App() {
         <Route path="/docket/:docketId" element={<PublicDocketDetail />} />
         <Route path="/lawyers" element={<Lawyers me={me} loading={authLoading} />} />
         <Route path="/lawyers/my-profile" element={<ProfessionalProfileEditor me={me} loading={authLoading} />} />
-        <Route path="/lawyers/:profileSlug" element={<LawyerProfileDetail />} />
+        <Route path="/lawyers/:profileSlug" element={<LawyerProfileDetail me={me} loading={authLoading} />} />
         <Route path="/services" element={<Services />} />
         <Route path="/services/:serviceId" element={<ServiceForm />} />
         <Route path="/requests/mine" element={<MyRequests me={me} loading={authLoading} />} />
@@ -945,16 +947,16 @@ function Lawyers({ me, loading: authLoading }: { me: CurrentUserResponse | null;
   const { data, loading, error } = useAsync(fetchLawyers);
   const profiles = data?.data ?? [];
   const canManageOwnProfile = !authLoading && canUseOwnProfessionalProfile(me);
-  const [ownProfileStatus, setOwnProfileStatus] = useState<string | null>(null);
+  const [ownProfile, setOwnProfile] = useState<ProfessionalProfileAdminRecord | null>(null);
 
   useEffect(() => {
     if (!canManageOwnProfile) {
-      setOwnProfileStatus(null);
+      setOwnProfile(null);
       return;
     }
     fetchMyProfessionalProfile()
-      .then((result) => setOwnProfileStatus(result.profile?.status ?? null))
-      .catch(() => setOwnProfileStatus(null));
+      .then((result) => setOwnProfile(result.profile))
+      .catch(() => setOwnProfile(null));
   }, [canManageOwnProfile]);
 
   return (
@@ -981,10 +983,13 @@ function Lawyers({ me, loading: authLoading }: { me: CurrentUserResponse | null;
                 supports transparency, counsel access, and professional accountability across the Department of Justice.
               </p>
               {canManageOwnProfile ? (
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <ButtonLink href="/lawyers/my-profile">
-                    {ownProfileStatus && ownProfileStatus !== "draft" ? "Edit My Professional Profile" : "Create My Professional Profile"}
-                  </ButtonLink>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <ButtonLink href="/lawyers/my-profile">{ownProfile ? "Edit My Professional Profile" : "Create My Professional Profile"}</ButtonLink>
+                  {ownProfile ? (
+                    <p className="text-sm text-muted">
+                      Current status: <span className="font-semibold text-white">{formatRegistryStatus(ownProfile.status)}</span>
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </Card>
@@ -1068,7 +1073,7 @@ function Lawyers({ me, loading: authLoading }: { me: CurrentUserResponse | null;
   );
 }
 
-function LawyerProfileDetail() {
+function LawyerProfileDetail({ me, loading: authLoading }: { me: CurrentUserResponse | null; loading: boolean }) {
   const { profileSlug } = useParams();
   const [data, setData] = useState<Awaited<ReturnType<typeof fetchLawyerProfile>> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1085,6 +1090,8 @@ function LawyerProfileDetail() {
   }, [profileSlug]);
 
   const profile = data?.data;
+  const viewerCanEdit = Boolean(data?.viewerCanEdit);
+  const viewerCanManage = Boolean(data?.viewerCanManage || (me?.authenticated && canManageProfiles(me)));
 
   if (!profileSlug) return <Navigate to="/lawyers" replace />;
 
@@ -1107,6 +1114,8 @@ function LawyerProfileDetail() {
                 Back to registry
               </Link>
               {data?.source === "seed" ? <Badge>Seed fallback</Badge> : <Badge>D1 public records</Badge>}
+              {!authLoading && viewerCanEdit ? <ButtonLink href="/lawyers/my-profile" variant="ghost">Edit My Profile</ButtonLink> : null}
+              {!authLoading && viewerCanManage ? <ButtonLink href="/dashboard/lawyers" variant="ghost">Manage Profile</ButtonLink> : null}
             </div>
 
             <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
@@ -3187,6 +3196,7 @@ function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loadi
   const [form, setForm] = useState<ProfileFormState>(emptyProfileForm);
   const [busy, setBusy] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -3273,6 +3283,45 @@ function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loadi
     }
   }
 
+  async function syncDiscordMembers() {
+    setSyncing(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await syncAdminProfiles();
+      const sync = result.data;
+      setMessage(`Discord sync complete: ${sync.eligibleMembersFound} eligible, ${sync.profilesCreated} created, ${sync.profilesUpdated} updated, ${sync.profilesMarkedInactive} inactive.`);
+      await loadProfiles();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Discord member sync failed.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function linkSelectedProfileOwner() {
+    if (!selected) return;
+    const discordUserId = form.discordUserId.trim();
+    if (!discordUserId) {
+      setError("Enter a Discord user ID before linking this profile.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await linkAdminProfileDiscord(selected.id, discordUserId);
+      setSelected(result.data);
+      setForm(profileFormFromRecord(result.data));
+      setMessage(result.detachedDuplicateProfileId ? "Discord account linked; an empty duplicate draft was detached." : "Discord account linked.");
+      await loadProfiles();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Discord owner link failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Dashboard" title="Professional profile management" description="Manage DOJ professional profiles, publication status, branch information, and internal Discord ownership links." />
@@ -3280,8 +3329,8 @@ function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loadi
         <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
           <div className="space-y-4">
             <Card>
-              <div className="grid gap-3 md:grid-cols-3">
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, title, office, Discord" className="field md:col-span-3" />
+              <div className="grid gap-3 md:grid-cols-4">
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, title, office, Discord" className="field md:col-span-4" />
                 <select value={status} onChange={(event) => setStatus(event.target.value)} className="field">
                   <option value="">All status</option>
                   {["draft", "published", "inactive"].map((item) => <option key={item} value={item}>{formatRegistryStatus(item)}</option>)}
@@ -3291,6 +3340,9 @@ function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loadi
                   {branches.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
                 <button type="button" onClick={startNew} className="rounded-md bg-gold px-3 py-2 text-sm font-semibold text-black">Create profile</button>
+                <button type="button" disabled={syncing} onClick={() => void syncDiscordMembers()} className="rounded-md border border-white/15 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+                  {syncing ? "Syncing..." : "Sync Discord Members"}
+                </button>
               </div>
             </Card>
             {busy ? <LoadingState /> : (
@@ -3311,6 +3363,9 @@ function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loadi
                     <h3 className="mt-3 text-lg font-semibold">{profile.displayName}</h3>
                     <p className="text-sm text-muted">{profile.title || "Untitled"} - {profile.office || profile.division || "No office/division"}</p>
                     <p className="mt-1 break-all text-xs text-muted">Discord: {profile.discordUserId ?? "Unlinked"}</p>
+                    {profile.ownerDisplayName || profile.ownerDiscordUsername ? (
+                      <p className="mt-1 text-xs text-muted">Owner: {profile.ownerDisplayName ?? profile.ownerDiscordUsername}</p>
+                    ) : null}
                   </button>
                 ))}
                 {profiles.length === 0 ? <Card>No profiles match the current filters.</Card> : null}
@@ -3328,10 +3383,21 @@ function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loadi
                 {selected?.status === "published" ? <ButtonLink href={`/lawyers/${selected.profileSlug}`} variant="ghost">Preview</ButtonLink> : null}
               </div>
               {selected ? (
-                <div className="mt-5 flex flex-wrap gap-2">
-                  <button disabled={saving} type="button" onClick={() => void setProfileStatus("publish")} className="rounded-md border border-emerald-400/40 px-3 py-2 text-sm font-semibold text-emerald-200">Publish</button>
-                  <button disabled={saving} type="button" onClick={() => void setProfileStatus("unpublish")} className="rounded-md border border-white/15 px-3 py-2 text-sm font-semibold text-white">Unpublish</button>
-                  <button disabled={saving} type="button" onClick={() => void setProfileStatus("inactive")} className="rounded-md border border-red-500/40 px-3 py-2 text-sm font-semibold text-red-200">Mark inactive</button>
+                <div className="mt-5 space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    <button disabled={saving} type="button" onClick={() => void setProfileStatus("publish")} className="rounded-md border border-emerald-400/40 px-3 py-2 text-sm font-semibold text-emerald-200">Publish</button>
+                    <button disabled={saving} type="button" onClick={() => void setProfileStatus("unpublish")} className="rounded-md border border-white/15 px-3 py-2 text-sm font-semibold text-white">Unpublish</button>
+                    <button disabled={saving} type="button" onClick={() => void setProfileStatus("inactive")} className="rounded-md border border-red-500/40 px-3 py-2 text-sm font-semibold text-red-200">Mark inactive</button>
+                  </div>
+                  <div className="rounded-md border border-white/10 bg-black/30 p-4">
+                    <p className="break-all text-sm text-muted">
+                      Discord owner: <span className="font-semibold text-white">{selected.discordUserId ?? "Unlinked"}</span>
+                      {selected.ownerDisplayName || selected.ownerDiscordUsername ? ` (${selected.ownerDisplayName ?? selected.ownerDiscordUsername})` : ""}
+                    </p>
+                    <button disabled={saving} type="button" onClick={() => void linkSelectedProfileOwner()} className="mt-3 rounded-md border border-gold/50 px-3 py-2 text-sm font-semibold text-gold disabled:opacity-60">
+                      {selected.discordUserId ? "Change Discord Link" : "Link Discord Account"}
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </Card>

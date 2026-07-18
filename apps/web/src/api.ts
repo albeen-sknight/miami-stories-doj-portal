@@ -22,9 +22,11 @@ import type {
   DocketSummary,
   EligibleJudge,
   FaqEntry,
+  LawyerProfileResponse,
   MyProfessionalProfileResponse,
   ProfessionalProfileAdminRecord,
   ProfessionalProfileInput,
+  ProfessionalProfileSyncResponse,
   ResourceDocument,
   ResourceCategory,
   SaveBarExamDraftInput,
@@ -37,11 +39,21 @@ import type {
 } from "@shotta-doj/shared";
 
 const RAW_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
+const DEPLOYED_WORKER_API_BASE_URL = "https://miami-stories-doj-api.natsu-dragneel13576.workers.dev";
+const PRODUCTION_PAGES_HOSTS = new Set(["miami-stories-doj.pages.dev", "www.miami-stories-doj.pages.dev"]);
 
-export const API_BASE_URL = RAW_API_BASE_URL.replace(/\/+$/, "");
+function defaultApiBaseUrl() {
+  if (RAW_API_BASE_URL) return RAW_API_BASE_URL;
+  if (typeof window !== "undefined" && PRODUCTION_PAGES_HOSTS.has(window.location.hostname)) {
+    return DEPLOYED_WORKER_API_BASE_URL;
+  }
+  return "";
+}
+
+export const API_BASE_URL = defaultApiBaseUrl().replace(/\/+$/, "");
 export const API_BASE = API_BASE_URL;
 
-const htmlApiError = "API returned HTML instead of JSON. The frontend is probably pointing at the Pages origin instead of the Worker API. Set VITE_API_BASE_URL to the deployed Worker URL.";
+const htmlApiError = "API returned HTML instead of JSON. The frontend is pointing at the Pages origin instead of the Worker API.";
 
 export function apiUrl(path: string) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -160,44 +172,55 @@ export async function fetchLawyers() {
   return fetchList<AttorneyProfile>("/api/lawyers");
 }
 
-export async function fetchLawyerProfile(slug: string): Promise<{ data: AttorneyProfile; source: "d1" | "seed" }> {
+export async function fetchLawyerProfile(slug: string): Promise<LawyerProfileResponse> {
   return apiFetch(`/api/lawyers/${encodeURIComponent(slug)}`);
 }
 
 export async function fetchMyProfessionalProfile(): Promise<MyProfessionalProfileResponse> {
-  return apiFetch("/api/profile/me");
+  return apiFetch("/api/professional-profiles/me");
 }
 
 export async function updateMyProfessionalProfile(input: ProfessionalProfileInput): Promise<MyProfessionalProfileResponse> {
-  return apiFetch("/api/profile/me", { method: "PATCH", body: JSON.stringify(input) });
+  return apiFetch("/api/professional-profiles/me", { method: "PATCH", body: JSON.stringify(input) });
 }
 
 export async function fetchAdminProfiles(params = ""): Promise<{ data: ProfessionalProfileAdminRecord[]; branches: string[] }> {
-  return apiFetch(`/api/admin/profiles${params}`);
+  return apiFetch(`/api/admin/professional-profiles${params}`);
 }
 
 export async function fetchAdminProfile(id: string): Promise<{ data: ProfessionalProfileAdminRecord; branches: string[] }> {
-  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}`);
+  return apiFetch(`/api/admin/professional-profiles/${encodeURIComponent(id)}`);
 }
 
 export async function createAdminProfile(input: ProfessionalProfileInput): Promise<{ data: ProfessionalProfileAdminRecord }> {
-  return apiFetch("/api/admin/profiles", { method: "POST", body: JSON.stringify(input) });
+  return apiFetch("/api/admin/professional-profiles", { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function updateAdminProfile(id: string, input: ProfessionalProfileInput): Promise<{ data: ProfessionalProfileAdminRecord }> {
-  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) });
+  return apiFetch(`/api/admin/professional-profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) });
 }
 
 export async function publishAdminProfile(id: string): Promise<{ data: ProfessionalProfileAdminRecord }> {
-  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}/publish`, { method: "POST" });
+  return apiFetch(`/api/admin/professional-profiles/${encodeURIComponent(id)}/publish`, { method: "POST" });
 }
 
 export async function unpublishAdminProfile(id: string): Promise<{ data: ProfessionalProfileAdminRecord }> {
-  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}/unpublish`, { method: "POST" });
+  return apiFetch(`/api/admin/professional-profiles/${encodeURIComponent(id)}/unpublish`, { method: "POST" });
 }
 
 export async function markAdminProfileInactive(id: string): Promise<{ data: ProfessionalProfileAdminRecord }> {
-  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}/inactive`, { method: "POST" });
+  return apiFetch(`/api/admin/professional-profiles/${encodeURIComponent(id)}/inactive`, { method: "POST" });
+}
+
+export async function syncAdminProfiles(): Promise<{ data: ProfessionalProfileSyncResponse }> {
+  return apiFetch("/api/admin/professional-profiles/sync-discord", { method: "POST" });
+}
+
+export async function linkAdminProfileDiscord(id: string, discordUserId: string): Promise<{ data: ProfessionalProfileAdminRecord; detachedDuplicateProfileId?: string | null; warning?: string | null }> {
+  return apiFetch(`/api/admin/professional-profiles/${encodeURIComponent(id)}/link-discord`, {
+    method: "POST",
+    body: JSON.stringify({ discordUserId })
+  });
 }
 
 export async function fetchMe(): Promise<CurrentUserResponse> {

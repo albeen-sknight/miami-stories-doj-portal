@@ -22,7 +22,7 @@ import {
   updateFaq,
   updateResource
 } from "./adminContent";
-import { bootstrapSession, completeDiscordAuth, logout, me, refreshOwnRoles, requireAuth, startDiscordAuth, AuthRequiredError } from "./auth";
+import { authenticate, bootstrapSession, completeDiscordAuth, logout, me, refreshOwnRoles, requireAuth, startDiscordAuth, AuthRequiredError } from "./auth";
 import { audit } from "./audit";
 import {
   addBarExamEventNote,
@@ -43,7 +43,7 @@ import {
   createFollowupChannelRoute
 } from "./barExam";
 import { deletionLogDetail, listDeletionLog, restoreFromDeletionLog, restoreEntityRoute, softDeleteEntityRoute } from "./deletionLog";
-import { listFaq, getLawyerBySlug, listLawyers, listResources } from "./db";
+import { listFaq, getLawyerBySlug, getLawyerOwnershipBySlug, listLawyers, listResources } from "./db";
 import { discordInteractions } from "./discordInteractions";
 import {
   addDocketEventNote,
@@ -80,11 +80,14 @@ import {
   adminProfessionalProfileDetail,
   adminProfessionalProfiles,
   createAdminProfessionalProfile,
+  linkAdminProfessionalProfileOwner,
   myProfessionalProfile,
   ProfilePermissionError,
   setAdminProfessionalProfileStatus,
+  syncAdminProfessionalProfiles,
   updateAdminProfessionalProfile,
-  updateMyProfessionalProfile
+  updateMyProfessionalProfile,
+  updateMyProfessionalProfileById
 } from "./professionalProfiles";
 import {
   addAdminRequestEvent,
@@ -188,10 +191,22 @@ export default {
 
       const publicLawyerMatch = url.pathname.match(/^\/api\/lawyers\/([^/]+)$/);
       if (publicLawyerMatch) {
-        return withCors(await requireMethod(request, "GET", () => publicLawyerDetail(env, publicLawyerMatch[1])), request, env);
+        return withCors(await requireMethod(request, "GET", () => publicLawyerDetail(request, env, publicLawyerMatch[1])), request, env);
       }
 
-      const adminProfileMatch = url.pathname.match(/^\/api\/admin\/profiles\/([^/]+)(?:\/([^/]+))?$/);
+      const publicProfessionalProfileMatch = url.pathname.match(/^\/api\/professional-profiles\/([^/]+)$/);
+      if (publicProfessionalProfileMatch && publicProfessionalProfileMatch[1] !== "me") {
+        const id = decodeURIComponent(publicProfessionalProfileMatch[1]);
+        if (request.method === "GET") return withCors(await publicLawyerDetail(request, env, id), request, env);
+        if (request.method === "PATCH") return withCors(await updateMyProfessionalProfileById(request, env, id), request, env);
+        return withCors(errorJson("METHOD_NOT_ALLOWED", "Use GET or PATCH for this route.", 405), request, env);
+      }
+
+      if (url.pathname === "/api/admin/profiles/sync-discord" || url.pathname === "/api/admin/professional-profiles/sync-discord") {
+        return withCors(await requireMethod(request, "POST", () => syncAdminProfessionalProfiles(request, env)), request, env);
+      }
+
+      const adminProfileMatch = url.pathname.match(/^\/api\/admin\/(?:profiles|professional-profiles)\/([^/]+)(?:\/([^/]+))?$/);
       if (adminProfileMatch) {
         const [, id, action] = adminProfileMatch;
         if (!action) {
@@ -201,6 +216,7 @@ export default {
         if (action === "publish") return withCors(await requireMethod(request, "POST", () => setAdminProfessionalProfileStatus(request, env, id, "published")), request, env);
         if (action === "unpublish") return withCors(await requireMethod(request, "POST", () => setAdminProfessionalProfileStatus(request, env, id, "draft")), request, env);
         if (action === "inactive") return withCors(await requireMethod(request, "POST", () => setAdminProfessionalProfileStatus(request, env, id, "inactive")), request, env);
+        if (action === "link-discord") return withCors(await requireMethod(request, "POST", () => linkAdminProfessionalProfileOwner(request, env, id)), request, env);
         return withCors(notFound(), request, env);
       }
 
@@ -338,6 +354,7 @@ async function routeRequest(request: Request, env: Env, url: URL): Promise<Respo
     case "/api/auth/refresh-roles":
       return await requireMethod(request, "POST", () => refreshOwnRoles(request, env));
     case "/api/profile/me":
+    case "/api/professional-profiles/me":
       if (request.method === "GET") return await myProfessionalProfile(request, env);
       if (request.method === "PATCH") return await updateMyProfessionalProfile(request, env);
       return errorJson("METHOD_NOT_ALLOWED", "Use GET or PATCH for this route.", 405);
@@ -350,6 +367,9 @@ async function routeRequest(request: Request, env: Env, url: URL): Promise<Respo
     case "/api/judicial-records":
       return await requireMethod(request, "GET", () => listJudicialRecords(request, env));
     case "/api/lawyers":
+    case "/api/professional-profiles":
+      if (url.pathname === "/api/professional-profiles" && request.method === "POST") return await updateMyProfessionalProfile(request, env);
+      if (request.method !== "GET") return errorJson("METHOD_NOT_ALLOWED", "Use GET for public profiles or POST to create/update your own profile.", 405);
       return listResponse<AttorneyProfile>(await listLawyers(env.DB), attorneyProfilesSeed);
     case "/api/me":
       return await requireMethod(request, "GET", () => me(request, env));
@@ -397,6 +417,7 @@ async function routeRequest(request: Request, env: Env, url: URL): Promise<Respo
       if (request.method === "POST") return await createFaq(request, env);
       return errorJson("METHOD_NOT_ALLOWED", "Use GET or POST for this route.", 405);
     case "/api/admin/profiles":
+    case "/api/admin/professional-profiles":
       if (request.method === "GET") return await adminProfessionalProfiles(request, env);
       if (request.method === "POST") return await createAdminProfessionalProfile(request, env);
       return errorJson("METHOD_NOT_ALLOWED", "Use GET or POST for this route.", 405);
@@ -496,12 +517,24 @@ function listResponse<T>(rows: T[] | null, seed: T[]): Response {
   return json(payload);
 }
 
-async function publicLawyerDetail(env: Env, slug: string): Promise<Response> {
+async function publicLawyerDetail(request: Request, env: Env, slug: string): Promise<Response> {
   const profile = await getLawyerBySlug(env.DB, slug);
-  if (profile) return json({ data: profile, source: "d1" });
+  if (profile) {
+    const viewer = await profileViewerAccess(request, env, slug);
+    return json({ data: profile, source: "d1", ...viewer });
+  }
   const fallback = attorneyProfilesSeed.find((entry) => entry.profileSlug === slug || entry.id === slug);
   if (!fallback) return errorJson("NOT_FOUND", "Registry profile not found.", 404);
-  return json({ data: fallback, source: "seed" });
+  return json({ data: fallback, source: "seed", viewerCanEdit: false, viewerCanManage: false });
+}
+
+async function profileViewerAccess(request: Request, env: Env, slug: string): Promise<{ viewerCanEdit: boolean; viewerCanManage: boolean }> {
+  const ctx = await authenticate(request, env);
+  if (!ctx.authenticated) return { viewerCanEdit: false, viewerCanManage: false };
+  const owner = await getLawyerOwnershipBySlug(env.DB, slug);
+  const viewerCanManage = ctx.actionPermissions.includes("MANAGE_ATTORNEY_REGISTRY") || ctx.actionPermissions.includes("ADMIN");
+  const viewerCanEdit = Boolean(owner?.discordUserId && owner.discordUserId === ctx.user.discordId);
+  return { viewerCanEdit, viewerCanManage };
 }
 
 async function sessionDebug(request: Request, env: Env): Promise<Response> {

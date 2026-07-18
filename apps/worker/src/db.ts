@@ -137,6 +137,24 @@ export async function getLawyerBySlug(db: Queryable, slug: string): Promise<Atto
   }
 }
 
+export async function getLawyerOwnershipBySlug(db: Queryable, slug: string): Promise<{ id: string; userId: string | null; discordUserId: string | null } | null> {
+  if (!db) return null;
+  try {
+    return await db
+      .prepare(
+        `SELECT id, user_id as userId, discord_user_id as discordUserId
+         FROM attorney_profiles
+         WHERE is_public = 1 AND deleted_at IS NULL AND status IN ('published', 'active') AND (profile_slug = ? OR id = ?)
+         LIMIT 1`
+      )
+      .bind(slug, slug)
+      .first<{ id: string; userId: string | null; discordUserId: string | null }>();
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "d1_fallback", table: "attorney_profiles_owner", cause: String(cause) }));
+    return null;
+  }
+}
+
 function mapAttorneyRow(row: AttorneyRow): AttorneyProfile {
   return {
     id: row.id,

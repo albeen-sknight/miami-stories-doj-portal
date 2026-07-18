@@ -3,13 +3,15 @@ import type {
   AttorneyResponsibility,
   MyProfessionalProfileResponse,
   ProfessionalProfileAdminRecord,
-  ProfessionalProfileInput
+  ProfessionalProfileInput,
+  ProfessionalProfileSyncResponse
 } from "@shotta-doj/shared";
 import { audit } from "./audit";
 import { requireAuth } from "./auth";
+import { avatarUrl, discordApi, fetchGuildMember, requireEnv } from "./discord";
 import { errorJson, json } from "./http";
 import { requirePermission } from "./permissions";
-import type { AuthContext, AuthUser, CachedRole, Env } from "./types";
+import type { AuthContext, AuthUser, CachedRole, DiscordGuildMember, Env } from "./types";
 
 const BRANCH_ROLES = [
   { roleId: "1523778635104780429", branch: "Judicial Branch", division: "Judicial Division", profileKind: "JUDICIAL_OFFICER" as const },
@@ -22,6 +24,13 @@ const MAX_SHORT = 120;
 const MAX_MEDIUM = 280;
 const MAX_LONG = 4000;
 
+type ProfessionalProfileSyncAction = "created" | "updated" | "inactive" | "none" | "skipped";
+
+interface ProfessionalProfileSyncResult {
+  action: ProfessionalProfileSyncAction;
+  profileId?: string;
+}
+
 export function professionalProfileAffiliations(roles: CachedRole[] | string[]): string[] {
   const roleIds = roles.map((role) => typeof role === "string" ? role : role.discordRoleId);
   return BRANCH_ROLES.filter((role) => roleIds.includes(role.roleId)).map((role) => role.branch);
@@ -31,8 +40,8 @@ export function hasProfessionalProfileEligibility(ctx: AuthContext): boolean {
   return professionalProfileAffiliations(ctx.roles).length > 0;
 }
 
-export async function syncProfessionalProfileForUser(env: Env, user: AuthUser, roles: CachedRole[] | string[]): Promise<void> {
-  if (!env.DB) return;
+export async function syncProfessionalProfileForUser(env: Env, user: AuthUser, roles: CachedRole[] | string[]): Promise<ProfessionalProfileSyncResult> {
+  if (!env.DB) return { action: "skipped" };
   const affiliations = professionalProfileAffiliations(roles);
   const existing = await loadProfileByOwner(env, user.id, user.discordId);
   if (affiliations.length === 0) {
@@ -42,8 +51,9 @@ export async function syncProfessionalProfileForUser(env: Env, user: AuthUser, r
       )
         .bind(existing.id)
         .run();
+      return { action: "inactive", profileId: existing.id };
     }
-    return;
+    return { action: "none" };
   }
 
   const primary = affiliations[0];
@@ -74,7 +84,7 @@ export async function syncProfessionalProfileForUser(env: Env, user: AuthUser, r
       )
       .run();
     await audit(env, "PROFESSIONAL_PROFILE_AUTO_PROVISIONED", { profile_id: id, branch: primary, affiliations: affiliations.join(", ") }, user.id);
-    return;
+    return { action: "created", profileId: id };
   }
 
   const nextStatus = existing.status === "inactive" ? "draft" : existing.status;
@@ -106,6 +116,7 @@ export async function syncProfessionalProfileForUser(env: Env, user: AuthUser, r
       existing.id
     )
     .run();
+  return { action: "updated", profileId: existing.id };
 }
 
 export async function myProfessionalProfile(request: Request, env: Env): Promise<Response> {
@@ -121,6 +132,23 @@ export async function updateMyProfessionalProfile(request: Request, env: Env): P
   const profile = await loadProfileByOwner(env, ctx.user.id, ctx.user.discordId);
   if (!profile) return errorJson("PROFILE_NOT_FOUND", "Professional profile could not be provisioned.", 404);
   if (profile.discordUserId && profile.discordUserId !== ctx.user.discordId) return errorJson("FORBIDDEN", "You may edit only your own professional profile.", 403);
+
+  const input = await parseProfileInput(request, { admin: false, affiliations: professionalProfileAffiliations(ctx.roles) });
+  if (!input.ok) return errorJson("VALIDATION_ERROR", input.message, 400);
+  const complete = profileReadyForPublication(input.value);
+  if (input.value.status === "published" && !complete.ok) return errorJson("PROFILE_INCOMPLETE", complete.message, 400);
+  await updateProfileRow(env, profile.id, input.value, { admin: false, ownerDiscordId: ctx.user.discordId });
+  await audit(env, "PROFESSIONAL_PROFILE_SELF_UPDATED", { profile_id: profile.id, status: input.value.status }, ctx.user.id);
+  const updated = await loadProfileById(env, profile.id);
+  return json(myProfilePayload(ctx, updated ? mapAdminProfile(updated) : null));
+}
+
+export async function updateMyProfessionalProfileById(request: Request, env: Env, id: string): Promise<Response> {
+  const ctx = await requireProfileEligible(request, env);
+  await syncProfessionalProfileForUser(env, ctx.user, ctx.roles);
+  const profile = await loadProfileById(env, id);
+  if (!profile) return errorJson("PROFILE_NOT_FOUND", "Professional profile not found.", 404);
+  if (profile.discordUserId !== ctx.user.discordId) return errorJson("FORBIDDEN", "You may edit only your own professional profile.", 403);
 
   const input = await parseProfileInput(request, { admin: false, affiliations: professionalProfileAffiliations(ctx.roles) });
   if (!input.ok) return errorJson("VALIDATION_ERROR", input.message, 400);
@@ -174,6 +202,8 @@ export async function createAdminProfessionalProfile(request: Request, env: Env)
   if (!input.ok) return errorJson("VALIDATION_ERROR", input.message, 400);
   const complete = profileReadyForPublication(input.value);
   if (input.value.status === "published" && !complete.ok) return errorJson("PROFILE_INCOMPLETE", complete.message, 400);
+  const linkCheck = await prepareAdminOwnerLink(env, null, input.value.discordUserId ?? "", { allowAutoDraftDetach: false });
+  if (!linkCheck.ok) return linkCheck.response;
   const id = crypto.randomUUID();
   const slug = await uniqueProfileSlug(env, input.value.displayName, null);
   const linkedUserId = input.value.discordUserId ? await portalUserIdForDiscord(env, input.value.discordUserId) : null;
@@ -199,6 +229,8 @@ export async function updateAdminProfessionalProfile(request: Request, env: Env,
   if (!input.ok) return errorJson("VALIDATION_ERROR", input.message, 400);
   const complete = profileReadyForPublication(input.value);
   if (input.value.status === "published" && !complete.ok) return errorJson("PROFILE_INCOMPLETE", complete.message, 400);
+  const linkCheck = await prepareAdminOwnerLink(env, id, input.value.discordUserId ?? "", { allowAutoDraftDetach: true });
+  if (!linkCheck.ok) return linkCheck.response;
   await updateProfileRow(env, id, input.value, { admin: true });
   await audit(env, "PROFESSIONAL_PROFILE_ADMIN_UPDATED", { profile_id: id, status: input.value.status }, ctx.user.id);
   return json({ data: mapAdminProfile((await loadProfileById(env, id))!) });
@@ -216,6 +248,161 @@ export async function setAdminProfessionalProfileStatus(request: Request, env: E
     .run();
   await audit(env, "PROFESSIONAL_PROFILE_STATUS_CHANGED", { profile_id: id, status }, ctx.user.id);
   return json({ data: mapAdminProfile((await loadProfileById(env, id))!) });
+}
+
+export async function linkAdminProfessionalProfileOwner(request: Request, env: Env, id: string): Promise<Response> {
+  const ctx = requirePermission(await requireAuth(request, env), "MANAGE_ATTORNEY_REGISTRY");
+  if (!env.DB) return errorJson("D1_UNAVAILABLE", "D1 is required for professional profile management.", 503);
+  const existing = await loadProfileById(env, id);
+  if (!existing) return errorJson("NOT_FOUND", "Professional profile not found.", 404);
+
+  let body: { discordUserId?: string };
+  try {
+    body = (await request.json()) as { discordUserId?: string };
+  } catch {
+    return errorJson("VALIDATION_ERROR", "Linking a profile requires a JSON body with discordUserId.", 400);
+  }
+
+  const discordUserId = clean(body.discordUserId, 20);
+  if (!validDiscordId(discordUserId)) return errorJson("VALIDATION_ERROR", "Linked Discord user ID must be a valid Discord snowflake.", 400);
+
+  const linkCheck = await prepareAdminOwnerLink(env, id, discordUserId, { allowAutoDraftDetach: true });
+  if (!linkCheck.ok) return linkCheck.response;
+  const owner = await resolveDiscordOwnerForLink(env, discordUserId);
+  if (!owner.ok) return owner.response;
+
+  await env.DB.prepare(
+    `UPDATE attorney_profiles
+     SET user_id = ?,
+         discord_user_id = ?,
+         profile_image_url = CASE WHEN profile_image_url IS NULL OR profile_image_url = '' THEN ? ELSE profile_image_url END,
+         last_role_sync_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(owner.user.id, discordUserId, owner.user.avatarUrl, id)
+    .run();
+
+  if (owner.roles) {
+    await refreshRoleCacheForMember(env, owner.user.id, owner.roles);
+    if (professionalProfileAffiliations(owner.roles).length > 0) {
+      await syncProfessionalProfileForUser(env, owner.user, owner.roles);
+    }
+  }
+
+  await audit(
+    env,
+    "PROFESSIONAL_PROFILE_OWNER_LINKED",
+    {
+      profile_id: id,
+      discord_user_id: discordUserId,
+      detached_duplicate_profile_id: linkCheck.detachedDuplicateProfileId ?? null,
+      warning: owner.warning ?? null
+    },
+    ctx.user.id
+  );
+  return json({
+    data: mapAdminProfile((await loadProfileById(env, id))!),
+    detachedDuplicateProfileId: linkCheck.detachedDuplicateProfileId ?? null,
+    warning: owner.warning ?? null
+  });
+}
+
+export async function syncAdminProfessionalProfiles(request: Request, env: Env): Promise<Response> {
+  const ctx = requirePermission(await requireAuth(request, env), "MANAGE_ATTORNEY_REGISTRY");
+  if (!env.DB) return errorJson("D1_UNAVAILABLE", "D1 is required for professional profile management.", 503);
+
+  const summary: ProfessionalProfileSyncResponse = {
+    ok: true,
+    eligibleMembersFound: 0,
+    profilesCreated: 0,
+    profilesUpdated: 0,
+    profilesMarkedInactive: 0,
+    roleCachesRefreshed: 0,
+    skippedMembers: 0,
+    errors: []
+  };
+  let guildId: string;
+  try {
+    guildId = requireEnv(env, "DISCORD_GUILD_ID");
+    requireEnv(env, "DISCORD_BOT_TOKEN");
+  } catch (cause) {
+    return errorJson(
+      "DISCORD_SYNC_NOT_CONFIGURED",
+      `Discord sync requires DISCORD_GUILD_ID and DISCORD_BOT_TOKEN. ${cause instanceof Error ? cause.message : String(cause)}`,
+      500
+    );
+  }
+  const eligibleDiscordIds = new Set<string>();
+  let after = "0";
+
+  for (let page = 0; page < 25; page += 1) {
+    const endpoint = `/guilds/${guildId}/members?limit=1000&after=${encodeURIComponent(after)}`;
+    let response: Response;
+    try {
+      response = await discordApi(env, endpoint);
+    } catch (cause) {
+      return errorJson(
+        "DISCORD_SYNC_NOT_CONFIGURED",
+        `Discord sync could not contact the Discord API. ${cause instanceof Error ? cause.message : String(cause)}`,
+        502
+      );
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      const details = parseDiscordErrorDetails(text);
+      const message = response.status === 403
+        ? "Discord bot cannot list guild members. Check bot guild access and enable Server Members Intent / GUILD_MEMBERS intent in the Discord Developer Portal."
+        : `Discord guild member sync failed with ${response.status}: ${details.message ?? text.slice(0, 180)}`;
+      await audit(env, "PROFESSIONAL_PROFILE_DISCORD_SYNC_FAILED", { status: response.status, discord_code: details.code, message }, ctx.user.id);
+      return errorJson("DISCORD_SYNC_FAILED", message, 502);
+    }
+
+    const members = await response.json() as DiscordGuildMember[];
+    if (members.length === 0) break;
+    for (const member of members) {
+      const discordUser = member.user;
+      if (!discordUser?.id) {
+        summary.skippedMembers += 1;
+        continue;
+      }
+      const roles = member.roles ?? [];
+      if (professionalProfileAffiliations(roles).length === 0) continue;
+      eligibleDiscordIds.add(discordUser.id);
+      summary.eligibleMembersFound += 1;
+      try {
+        const user = await upsertUserFromDiscordMember(env, guildId, member);
+        await refreshRoleCacheForMember(env, user.id, roles);
+        summary.roleCachesRefreshed += 1;
+        const result = await syncProfessionalProfileForUser(env, user, roles);
+        if (result.action === "created") summary.profilesCreated += 1;
+        if (result.action === "updated") summary.profilesUpdated += 1;
+        if (result.action === "inactive") summary.profilesMarkedInactive += 1;
+      } catch (cause) {
+        summary.errors.push({ discordUserId: discordUser.id, message: cause instanceof Error ? cause.message : String(cause) });
+      }
+    }
+
+    after = members[members.length - 1]?.user?.id ?? after;
+    if (members.length < 1000) break;
+  }
+
+  summary.profilesMarkedInactive += await markProfilesInactiveForMissingEligibleMembers(env, eligibleDiscordIds);
+  summary.ok = summary.errors.length === 0;
+  await audit(
+    env,
+    "PROFESSIONAL_PROFILE_DISCORD_SYNC_COMPLETED",
+    {
+      eligible_members_found: summary.eligibleMembersFound,
+      profiles_created: summary.profilesCreated,
+      profiles_updated: summary.profilesUpdated,
+      profiles_marked_inactive: summary.profilesMarkedInactive,
+      skipped_members: summary.skippedMembers,
+      errors: summary.errors.length
+    },
+    ctx.user.id
+  );
+  return json({ data: summary });
 }
 
 async function requireProfileEligible(request: Request, env: Env): Promise<AuthContext> {
@@ -404,6 +591,185 @@ function profileUpdateBindings(
   ];
   if (!options.admin) return [...base, options.ownerDiscordId];
   return [options.linkedUserId ?? null, input.discordUserId || null, ...base];
+}
+
+async function prepareAdminOwnerLink(
+  env: Env,
+  targetProfileId: string | null,
+  discordUserId: string,
+  options: { allowAutoDraftDetach: boolean }
+): Promise<{ ok: true; detachedDuplicateProfileId?: string | null } | { ok: false; response: Response }> {
+  if (!discordUserId) return { ok: true, detachedDuplicateProfileId: null };
+  if (!validDiscordId(discordUserId)) {
+    return { ok: false, response: errorJson("VALIDATION_ERROR", "Linked Discord user ID must be a valid Discord snowflake.", 400) };
+  }
+  const conflicting = await loadProfileByDiscord(env, discordUserId);
+  if (!conflicting || conflicting.id === targetProfileId) return { ok: true, detachedDuplicateProfileId: null };
+  if (targetProfileId && options.allowAutoDraftDetach && isAutoProvisionedDraft(conflicting)) {
+    await detachAutoProvisionedDraft(env, conflicting.id);
+    return { ok: true, detachedDuplicateProfileId: conflicting.id };
+  }
+  return {
+    ok: false,
+    response: errorJson(
+      "DISCORD_OWNER_ALREADY_LINKED",
+      `That Discord account is already linked to the professional profile "${conflicting.displayName}".`,
+      409
+    )
+  };
+}
+
+async function resolveDiscordOwnerForLink(
+  env: Env,
+  discordUserId: string
+): Promise<{ ok: true; user: AuthUser; roles: string[] | null; warning?: string | null } | { ok: false; response: Response }> {
+  let member: DiscordGuildMember | null = null;
+  try {
+    member = await fetchGuildMember(env, discordUserId);
+  } catch (cause) {
+    const existingUser = await loadUserByDiscord(env, discordUserId);
+    if (existingUser) {
+      return {
+        ok: true,
+        user: existingUser,
+        roles: null,
+        warning: `Discord member lookup failed; linked to the existing portal user only. ${cause instanceof Error ? cause.message : String(cause)}`
+      };
+    }
+    return {
+      ok: false,
+      response: errorJson(
+        "DISCORD_MEMBER_LOOKUP_FAILED",
+        "Discord member could not be verified. Check the bot token, guild ID, and Server Members Intent / GUILD_MEMBERS intent before linking this owner.",
+        502
+      )
+    };
+  }
+
+  if (!member) return { ok: false, response: errorJson("DISCORD_MEMBER_NOT_FOUND", "That Discord user is not a member of the configured Miami Stories guild.", 400) };
+  if (!member.user?.id) return { ok: false, response: errorJson("DISCORD_MEMBER_INVALID", "Discord did not return user details for that guild member.", 502) };
+  const guildId = requireEnv(env, "DISCORD_GUILD_ID");
+  return { ok: true, user: await upsertUserFromDiscordMember(env, guildId, member), roles: member.roles ?? [] };
+}
+
+async function upsertUserFromDiscordMember(env: Env, guildId: string, member: DiscordGuildMember): Promise<AuthUser> {
+  const discordUser = member.user;
+  if (!discordUser?.id || !discordUser.username) throw new Error("Discord member response was missing user identity fields.");
+  const id = crypto.randomUUID();
+  const displayName = cleanOptional(member.nick) ?? cleanOptional(discordUser.global_name) ?? discordUser.username;
+  const userAvatarUrl = member.avatar
+    ? `https://cdn.discordapp.com/guilds/${guildId}/users/${discordUser.id}/avatars/${member.avatar}.png`
+    : avatarUrl(discordUser);
+  await env.DB!.prepare(
+    `INSERT INTO users (id, discord_id, discord_username, discord_global_name, display_name, avatar_url, email, last_login_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     ON CONFLICT(discord_id) DO UPDATE SET
+       discord_username = excluded.discord_username,
+       discord_global_name = excluded.discord_global_name,
+       display_name = excluded.display_name,
+       avatar_url = excluded.avatar_url,
+       updated_at = excluded.updated_at`
+  )
+    .bind(id, discordUser.id, discordUser.username, discordUser.global_name ?? null, displayName, userAvatarUrl, discordUser.email ?? null)
+    .run();
+  const user = await loadUserByDiscord(env, discordUser.id);
+  if (!user) throw new Error("Discord member portal user upsert failed.");
+  return user;
+}
+
+async function refreshRoleCacheForMember(env: Env, userId: string, roleIds: string[]): Promise<void> {
+  await env.DB!.prepare("DELETE FROM user_role_cache WHERE user_id = ?").bind(userId).run();
+  for (const roleId of roleIds) {
+    const mapping = await env.DB!.prepare("SELECT role_name as roleName FROM role_mappings WHERE discord_role_id = ?")
+      .bind(roleId)
+      .first<{ roleName: string | null }>();
+    await env.DB!.prepare(
+      `INSERT INTO user_role_cache (id, user_id, discord_role_id, role_name)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, discord_role_id) DO UPDATE SET role_name = excluded.role_name, cached_at = CURRENT_TIMESTAMP`
+    )
+      .bind(crypto.randomUUID(), userId, roleId, mapping?.roleName ?? null)
+      .run();
+  }
+}
+
+async function markProfilesInactiveForMissingEligibleMembers(env: Env, eligibleDiscordIds: Set<string>): Promise<number> {
+  const result = await env.DB!.prepare(
+    `SELECT id, discord_user_id as discordUserId
+     FROM attorney_profiles
+     WHERE deleted_at IS NULL
+       AND discord_user_id IS NOT NULL
+       AND status != 'inactive'`
+  ).all<{ id: string; discordUserId: string }>();
+  let marked = 0;
+  for (const row of result.results) {
+    if (eligibleDiscordIds.has(row.discordUserId)) continue;
+    await env.DB!.prepare(
+      "UPDATE attorney_profiles SET status = 'inactive', is_public = 0, affiliations_json = '[]', last_role_sync_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    )
+      .bind(row.id)
+      .run();
+    marked += 1;
+  }
+  return marked;
+}
+
+async function loadUserByDiscord(env: Env, discordUserId: string): Promise<AuthUser | null> {
+  return env.DB!.prepare(
+    "SELECT id, discord_id as discordId, discord_username as discordUsername, discord_global_name as discordGlobalName, display_name as displayName, avatar_url as avatarUrl, last_login_at as lastLoginAt FROM users WHERE discord_id = ?"
+  )
+    .bind(discordUserId)
+    .first<AuthUser>();
+}
+
+async function loadProfileByDiscord(env: Env, discordUserId: string): Promise<ProfileRow | null> {
+  return env.DB!.prepare(`${adminProfileSelect()} WHERE ap.deleted_at IS NULL AND ap.discord_user_id = ? LIMIT 1`)
+    .bind(discordUserId)
+    .first<ProfileRow>();
+}
+
+async function detachAutoProvisionedDraft(env: Env, id: string): Promise<void> {
+  await env.DB!.prepare(
+    `UPDATE attorney_profiles
+     SET user_id = NULL,
+         discord_user_id = NULL,
+         status = 'inactive',
+         is_public = 0,
+         affiliations_json = '[]',
+         last_role_sync_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(id)
+    .run();
+}
+
+function isAutoProvisionedDraft(profile: ProfileRow): boolean {
+  return (
+    profile.status === "draft" &&
+    !Boolean(profile.isPublic) &&
+    !profile.title?.trim() &&
+    !profile.office?.trim() &&
+    !profile.barNumber &&
+    !profile.contact?.trim() &&
+    !profile.biographyMarkdown?.trim() &&
+    safeJsonArray(profile.practiceAreasJson).length === 0 &&
+    safeJsonResponsibilities(profile.responsibilitiesJson).length === 0
+  );
+}
+
+function parseDiscordErrorDetails(text: string): { code?: number; message?: string } {
+  try {
+    const parsed = JSON.parse(text) as { code?: number; message?: string };
+    return { code: parsed.code, message: parsed.message };
+  } catch {
+    return {};
+  }
+}
+
+function cleanOptional(value: unknown): string | null {
+  const cleaned = clean(value, MAX_SHORT);
+  return cleaned || null;
 }
 
 function adminProfileSelect(): string {

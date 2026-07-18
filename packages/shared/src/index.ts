@@ -340,6 +340,24 @@ export interface MyProfessionalProfileResponse {
   profile: ProfessionalProfileAdminRecord | null;
 }
 
+export interface LawyerProfileResponse {
+  data: AttorneyProfile;
+  source: "d1" | "seed";
+  viewerCanEdit?: boolean;
+  viewerCanManage?: boolean;
+}
+
+export interface ProfessionalProfileSyncResponse {
+  ok: boolean;
+  eligibleMembersFound: number;
+  profilesCreated: number;
+  profilesUpdated: number;
+  profilesMarkedInactive: number;
+  roleCachesRefreshed: number;
+  skippedMembers: number;
+  errors: Array<{ discordUserId?: string; message: string }>;
+}
+
 export type CurrentUserResponse =
   | {
       authenticated: false;
