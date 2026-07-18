@@ -29,11 +29,12 @@ export const SERVICE_DEFINITIONS: Record<ServiceRequestType, ServiceDefinition> 
       "preferredRepresentation",
       "inCustody",
       "urgency",
+      "publicSummary",
       "briefDescription",
       "preferredContactMethod"
     ],
     mainPartyField: "characterFullName",
-    shortTitleFields: ["characterFullName", "representationType"]
+    shortTitleFields: ["publicSummary", "representationType"]
   },
   CRIMINAL_TRIAL: {
     type: "CRIMINAL_TRIAL",

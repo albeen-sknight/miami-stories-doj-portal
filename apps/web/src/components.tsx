@@ -200,6 +200,9 @@ export function Layout({ children, me, onLogout }: PropsWithChildren<{ me: Curre
                       {canUseBarWorkspace(me) && (
                         <DrawerLink to="/dashboard/bar" label="Bar Admin" active={pathname === "/dashboard/bar"} onClick={() => setDrawerOpen(false)} />
                       )}
+                      {canManageProfiles(me) && (
+                        <DrawerLink to="/dashboard/lawyers" label="Professional Profiles" active={pathname === "/dashboard/lawyers"} onClick={() => setDrawerOpen(false)} />
+                      )}
                       {canReviewBarExam(me) && (
                         <DrawerLink to="/dashboard/bar-exam" label="Bar Exam Review" active={pathname.startsWith("/dashboard/bar-exam") && pathname !== "/dashboard/bar-exam/versions"} onClick={() => setDrawerOpen(false)} />
                       )}
@@ -451,6 +454,10 @@ function canManageFaq(me: CurrentUserResponse | null): boolean {
 
 function canUseBarWorkspace(me: CurrentUserResponse | null): boolean {
   return me?.authenticated === true && (me.actionPermissions.includes("REVIEW_BAR_EXAMS") || me.actionPermissions.includes("MANAGE_ATTORNEY_REGISTRY") || me.actionPermissions.includes("ADMIN"));
+}
+
+function canManageProfiles(me: CurrentUserResponse | null): boolean {
+  return me?.authenticated === true && (me.actionPermissions.includes("MANAGE_ATTORNEY_REGISTRY") || me.actionPermissions.includes("ADMIN"));
 }
 
 function canReviewBarExam(me: CurrentUserResponse | null): boolean {

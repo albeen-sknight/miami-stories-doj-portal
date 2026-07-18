@@ -279,16 +279,65 @@ export interface AttorneyProfile {
   shortTitle: string;
   office: string;
   division: string;
+  branch?: string | null;
+  affiliations?: string[];
   status: string;
   profileKind: AttorneyProfileKind;
   barNumber?: string | null;
   practiceAreas: string[];
   biographyMarkdown: string;
+  experienceMarkdown?: string | null;
+  educationMarkdown?: string | null;
+  achievementsMarkdown?: string | null;
+  professionalHistoryMarkdown?: string | null;
+  profileImageUrl?: string | null;
   motto?: string | null;
   quote?: string | null;
   responsibilities: AttorneyResponsibility[];
   sortOrder: number;
   contact?: string;
+}
+
+export interface ProfessionalProfileInput {
+  displayName: string;
+  title: string;
+  shortTitle?: string;
+  branch?: string;
+  office?: string;
+  division?: string;
+  status?: "draft" | "published" | "inactive";
+  profileKind?: AttorneyProfileKind;
+  barNumber?: string;
+  practiceAreas?: string[];
+  biographyMarkdown?: string;
+  experienceMarkdown?: string;
+  educationMarkdown?: string;
+  achievementsMarkdown?: string;
+  professionalHistoryMarkdown?: string;
+  profileImageUrl?: string;
+  motto?: string;
+  quote?: string;
+  responsibilities?: AttorneyResponsibility[];
+  sortOrder?: number;
+  contact?: string;
+  discordUserId?: string;
+}
+
+export interface ProfessionalProfileAdminRecord extends AttorneyProfile {
+  discordUserId: string | null;
+  portalUserId: string | null;
+  ownerDisplayName: string | null;
+  ownerDiscordUsername: string | null;
+  isPublic: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MyProfessionalProfileResponse {
+  eligible: boolean;
+  affiliations: string[];
+  primaryBranch: string | null;
+  profile: ProfessionalProfileAdminRecord | null;
 }
 
 export type CurrentUserResponse =

@@ -23,6 +23,7 @@ import { randomToken, sha256 } from "./crypto";
 import { avatarUrl, discordAuthorizeUrl, exchangeDiscordCode, fetchDiscordUser, fetchGuildMember, MissingEnvironmentError } from "./discord";
 import { errorJson, json, redirect } from "./http";
 import { deriveActionPermissions } from "./permissions";
+import { syncProfessionalProfileForUser } from "./professionalProfiles";
 import type { AuthContext, AuthUser, CachedRole, DiscordGuildMember, DiscordUser, Env, MeResponse, MaybeAuthContext } from "./types";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 6;
@@ -135,6 +136,7 @@ export async function completeDiscordAuth(request: Request, env: Env): Promise<R
     const user = await upsertUser(env, discordUser);
     actorUserId = user.id;
     await refreshRoleCacheForMember(env, user.id, guildMember);
+    await syncProfessionalProfileForUser(env, user, guildMember.roles);
     const authContext = await buildAuthContext(env, user, crypto.randomUUID());
     const sessionToken = randomToken(48);
     const sessionHash = await sha256(sessionToken);
@@ -283,6 +285,7 @@ export async function refreshOwnRoles(request: Request, env: Env): Promise<Respo
       );
     }
     await refreshRoleCacheForMember(env, ctx.user.id, member);
+    await syncProfessionalProfileForUser(env, ctx.user, member.roles);
     const refreshed = await buildAuthContext(env, ctx.user, ctx.sessionId);
     await audit(
       env,

@@ -186,7 +186,7 @@ export async function adminBarSummary(request: Request, env: Env): Promise<Respo
       SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
       SUM(CASE WHEN status = 'REFERRED_FOR_INTERVIEW' THEN 1 ELSE 0 END) as referred
       FROM bar_exam_attempts WHERE deleted_at IS NULL`).first(),
-    env.DB.prepare("SELECT COUNT(*) as publicCount, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as activeCount FROM attorney_profiles WHERE is_public = 1 AND deleted_at IS NULL").first()
+    env.DB.prepare("SELECT COUNT(*) as publicCount, SUM(CASE WHEN status IN ('published', 'active') THEN 1 ELSE 0 END) as activeCount FROM attorney_profiles WHERE is_public = 1 AND deleted_at IS NULL").first()
   ]);
   return json({
     data: {

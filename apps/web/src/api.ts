@@ -22,6 +22,9 @@ import type {
   DocketSummary,
   EligibleJudge,
   FaqEntry,
+  MyProfessionalProfileResponse,
+  ProfessionalProfileAdminRecord,
+  ProfessionalProfileInput,
   ResourceDocument,
   ResourceCategory,
   SaveBarExamDraftInput,
@@ -159,6 +162,42 @@ export async function fetchLawyers() {
 
 export async function fetchLawyerProfile(slug: string): Promise<{ data: AttorneyProfile; source: "d1" | "seed" }> {
   return apiFetch(`/api/lawyers/${encodeURIComponent(slug)}`);
+}
+
+export async function fetchMyProfessionalProfile(): Promise<MyProfessionalProfileResponse> {
+  return apiFetch("/api/profile/me");
+}
+
+export async function updateMyProfessionalProfile(input: ProfessionalProfileInput): Promise<MyProfessionalProfileResponse> {
+  return apiFetch("/api/profile/me", { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function fetchAdminProfiles(params = ""): Promise<{ data: ProfessionalProfileAdminRecord[]; branches: string[] }> {
+  return apiFetch(`/api/admin/profiles${params}`);
+}
+
+export async function fetchAdminProfile(id: string): Promise<{ data: ProfessionalProfileAdminRecord; branches: string[] }> {
+  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}`);
+}
+
+export async function createAdminProfile(input: ProfessionalProfileInput): Promise<{ data: ProfessionalProfileAdminRecord }> {
+  return apiFetch("/api/admin/profiles", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateAdminProfile(id: string, input: ProfessionalProfileInput): Promise<{ data: ProfessionalProfileAdminRecord }> {
+  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function publishAdminProfile(id: string): Promise<{ data: ProfessionalProfileAdminRecord }> {
+  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}/publish`, { method: "POST" });
+}
+
+export async function unpublishAdminProfile(id: string): Promise<{ data: ProfessionalProfileAdminRecord }> {
+  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}/unpublish`, { method: "POST" });
+}
+
+export async function markAdminProfileInactive(id: string): Promise<{ data: ProfessionalProfileAdminRecord }> {
+  return apiFetch(`/api/admin/profiles/${encodeURIComponent(id)}/inactive`, { method: "POST" });
 }
 
 export async function fetchMe(): Promise<CurrentUserResponse> {

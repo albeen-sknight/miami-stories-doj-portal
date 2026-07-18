@@ -77,6 +77,16 @@ import {
 } from "./judicialRecords";
 import { PermissionError, requireAnyPermission, requirePermission } from "./permissions";
 import {
+  adminProfessionalProfileDetail,
+  adminProfessionalProfiles,
+  createAdminProfessionalProfile,
+  myProfessionalProfile,
+  ProfilePermissionError,
+  setAdminProfessionalProfileStatus,
+  updateAdminProfessionalProfile,
+  updateMyProfessionalProfile
+} from "./professionalProfiles";
+import {
   addAdminRequestEvent,
   adminRequestDetail,
   adminRequests,
@@ -181,6 +191,19 @@ export default {
         return withCors(await requireMethod(request, "GET", () => publicLawyerDetail(env, publicLawyerMatch[1])), request, env);
       }
 
+      const adminProfileMatch = url.pathname.match(/^\/api\/admin\/profiles\/([^/]+)(?:\/([^/]+))?$/);
+      if (adminProfileMatch) {
+        const [, id, action] = adminProfileMatch;
+        if (!action) {
+          if (request.method === "GET") return withCors(await adminProfessionalProfileDetail(request, env, id), request, env);
+          if (request.method === "PATCH") return withCors(await updateAdminProfessionalProfile(request, env, id), request, env);
+        }
+        if (action === "publish") return withCors(await requireMethod(request, "POST", () => setAdminProfessionalProfileStatus(request, env, id, "published")), request, env);
+        if (action === "unpublish") return withCors(await requireMethod(request, "POST", () => setAdminProfessionalProfileStatus(request, env, id, "draft")), request, env);
+        if (action === "inactive") return withCors(await requireMethod(request, "POST", () => setAdminProfessionalProfileStatus(request, env, id, "inactive")), request, env);
+        return withCors(notFound(), request, env);
+      }
+
       const publicDocketMatch = url.pathname.match(/^\/api\/docket\/([^/]+)$/);
       if (publicDocketMatch) {
         return withCors(await requireMethod(request, "GET", () => publicDocketDetail(request, env, publicDocketMatch[1])), request, env);
@@ -276,6 +299,10 @@ export default {
         await audit(env, "AUTH_FORBIDDEN", { route: url.pathname, reason });
         return withCors(errorJson("FORBIDDEN", "You do not have permission to access this DOJ Portal resource.", 403), request, env);
       }
+      if (cause instanceof ProfilePermissionError || (cause instanceof Error && cause.name === "ProfilePermissionError")) {
+        await audit(env, "AUTH_FORBIDDEN", { route: url.pathname, reason: "missing_authorized_branch_role" });
+        return withCors(errorJson("FORBIDDEN", "An authorized DOJ branch role is required for professional profile access.", 403), request, env);
+      }
       console.error(JSON.stringify({ event: "api_error", path: url.pathname, cause: String(cause) }));
       return withCors(
         errorJson(
@@ -310,6 +337,10 @@ async function routeRequest(request: Request, env: Env, url: URL): Promise<Respo
       return await requireMethod(request, "POST", () => logout(request, env));
     case "/api/auth/refresh-roles":
       return await requireMethod(request, "POST", () => refreshOwnRoles(request, env));
+    case "/api/profile/me":
+      if (request.method === "GET") return await myProfessionalProfile(request, env);
+      if (request.method === "PATCH") return await updateMyProfessionalProfile(request, env);
+      return errorJson("METHOD_NOT_ALLOWED", "Use GET or PATCH for this route.", 405);
     case "/api/resources":
       return listResponse<ResourceDocument>(await listResources(env.DB), resourceDocumentsSeed);
     case "/api/faq":
@@ -364,6 +395,10 @@ async function routeRequest(request: Request, env: Env, url: URL): Promise<Respo
     case "/api/admin/faq":
       if (request.method === "GET") return await adminFaq(request, env);
       if (request.method === "POST") return await createFaq(request, env);
+      return errorJson("METHOD_NOT_ALLOWED", "Use GET or POST for this route.", 405);
+    case "/api/admin/profiles":
+      if (request.method === "GET") return await adminProfessionalProfiles(request, env);
+      if (request.method === "POST") return await createAdminProfessionalProfile(request, env);
       return errorJson("METHOD_NOT_ALLOWED", "Use GET or POST for this route.", 405);
     case "/api/admin/bar":
       return await requireMethod(request, "GET", () => adminBarSummary(request, env));

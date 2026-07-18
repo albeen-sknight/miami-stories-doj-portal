@@ -90,6 +90,7 @@ export async function createServiceRequestForContext(
   const trackingCode = crypto.randomUUID();
   const mainParty = readString(sanitizedPayload, def.mainPartyField) || "Unknown";
   const shortTitle = def.shortTitleFields.map((field) => readString(sanitizedPayload, field)).filter(Boolean).join(" / ") || def.label;
+  const publicSummary = publicSummaryForRequest(input.requestType, sanitizedPayload, shortTitle);
   const publicChannelId = await mappingId(env, def.publicChannelKey);
   const categoryId = def.categoryKey ? await mappingId(env, def.categoryKey) : null;
   const selectedRoleId = await selectedPingRoleId(env, input.requestType, sanitizedPayload);
@@ -112,7 +113,7 @@ export async function createServiceRequestForContext(
       ctx.user.discordUsername,
       requesterContact,
       payloadJson,
-      shortTitle,
+      publicSummary,
       documentUrl,
       def.templateUrl ?? null,
       publicChannelId,
@@ -1114,6 +1115,14 @@ function validateInput(input: CreateServiceRequestInput): { ok: true } | { ok: f
   if (urgency && !["Emergency / currently detained", "Same day", "Normal"].includes(urgency)) {
     return { ok: false, message: "Urgency is not valid." };
   }
+  if (input.requestType === "LAWYER") {
+    const publicSummary = readString(input.payload, "publicSummary");
+    if (!publicSummary) return { ok: false, message: "A short public summary is required for lawyer requests." };
+    if (publicSummary.length > 240) return { ok: false, message: "Public summary must be 240 characters or less." };
+    if (containsPublicContactInfo(publicSummary)) {
+      return { ok: false, message: "Public summary cannot include phone numbers, Discord mentions, addresses, or private contact details." };
+    }
+  }
   return { ok: true };
 }
 
@@ -1227,6 +1236,20 @@ function parsePayload(value: string): Record<string, unknown> {
 function readString(payload: Record<string, unknown>, field: string): string {
   const value = payload[field];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function publicSummaryForRequest(type: ServiceRequestType, payload: Record<string, unknown>, fallback: string): string {
+  if (type !== "LAWYER") return fallback.slice(0, 300);
+  const explicit = readString(payload, "publicSummary");
+  if (explicit) return explicit.slice(0, 240);
+  const representationType = readString(payload, "representationType") || "legal matter";
+  return `Seeking legal counsel regarding ${representationType.toLowerCase()}.`;
+}
+
+function containsPublicContactInfo(value: string): boolean {
+  return /<@!?\d{17,20}>/.test(value) ||
+    /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(value) ||
+    /\b(?:phone|address|discord|contact me|dm me)\b/i.test(value);
 }
 
 function cleanOptional(value: unknown): string | null {

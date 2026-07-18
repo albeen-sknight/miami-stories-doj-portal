@@ -71,10 +71,10 @@ export async function seedFoundationData(db: D1Database): Promise<Record<string,
     await db
       .prepare(
         `INSERT OR REPLACE INTO attorney_profiles (
-          id, display_name, profile_slug, title, short_title, office, division, profile_kind,
+          id, display_name, profile_slug, title, short_title, office, division, branch, affiliations_json, profile_kind,
           bar_number, practice_areas_json, status, contact, biography_markdown, motto, quote,
           responsibilities_json, sort_order, is_public, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`
       )
       .bind(
         lawyer.id,
@@ -84,6 +84,8 @@ export async function seedFoundationData(db: D1Database): Promise<Record<string,
         lawyer.shortTitle,
         lawyer.office,
         lawyer.division,
+        lawyer.branch ?? lawyer.division,
+        JSON.stringify(lawyer.affiliations ?? (lawyer.branch ? [lawyer.branch] : [])),
         lawyer.profileKind,
         lawyer.barNumber ?? null,
         JSON.stringify(lawyer.practiceAreas),

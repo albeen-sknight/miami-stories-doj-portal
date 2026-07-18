@@ -18,11 +18,11 @@ export const roleMappingsSeed = [
 ] as const;
 
 export const referenceRoleMappingsSeed = [
-  ["Judicial Branch", ""],
+  ["Judicial Branch", "1523778635104780429"],
   ["DA Paralegal", ""],
-  ["Executive Branch", ""],
+  ["Executive Branch", "1523779395716776016"],
   ["Defense Paralegal", ""],
-  ["Defense Branch", ""],
+  ["Defense Branch", "1523782369461403888"],
   ["ATF Special Agent", ""],
   ["PD High Command", ""],
   ["PD Liaison", ""]

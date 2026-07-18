@@ -49,6 +49,9 @@ export interface ServiceField {
   kind: FieldKind;
   required?: boolean;
   options?: string[];
+  help?: string;
+  placeholder?: string;
+  maxLength?: number;
 }
 
 export interface ServiceFormDefinition {
@@ -96,8 +99,17 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     prefix: "LAW",
     icon: UserRoundCheck,
     who: "Miami Stories residents who need defense counsel, public defender review, private-practitioner support, or legal guidance.",
-    prepare: ["Character identity", "Case/arrest details if available", "Preferred counsel type", "Urgency and contact method"],
-    guidance: ["Full details are stored privately and sent only to a private DOJ ticket-style channel."],
+    prepare: [
+      "Character identity",
+      "Preferred counsel type",
+      "Urgency and contact method",
+      "A short, general public summary only"
+    ],
+    guidance: [
+      "The public lawyer request gives attorneys only enough context to understand what type of representation may be needed.",
+      "Do not include detailed allegations, incident narratives, sensitive personal information, phone numbers, addresses, confidential evidence, or unnecessary names in the public summary.",
+      "Sensitive details and full case information can be provided privately through the DOJ staff review process after intake."
+    ],
     fields: [
       { name: "characterFullName", label: "Character full name", kind: "text", required: true },
       { name: "citizenId", label: "Citizen ID", kind: "text", required: true },
@@ -108,7 +120,22 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
       { name: "chargesReason", label: "Charges or reason for detention", kind: "textarea" },
       { name: "caseNumber", label: "Case/arrest/report number, if applicable", kind: "text" },
       { name: "urgency", label: "Urgency", kind: "select", required: true, options: urgencyOptions },
-      { name: "briefDescription", label: "Brief description", kind: "textarea", required: true },
+      {
+        name: "publicSummary",
+        label: "Public summary",
+        kind: "textarea",
+        required: true,
+        maxLength: 240,
+        placeholder: "Example: Need an attorney to help me petition for a restraining or protective order.",
+        help: "Short and general only. This may appear in the public lawyer request post."
+      },
+      {
+        name: "briefDescription",
+        label: "Private case details for DOJ staff",
+        kind: "textarea",
+        required: true,
+        help: "Use this private field for facts DOJ staff need to route the request. It is not copied into the public lawyer request post."
+      },
       { name: "preferredContactMethod", label: "Preferred contact method", kind: "text", required: true }
     ]
   },

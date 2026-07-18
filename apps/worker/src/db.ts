@@ -10,11 +10,18 @@ type AttorneyRow = {
   shortTitle: string;
   office: string;
   division: string;
+  branch: string | null;
+  affiliations: string | null;
   status: string;
   profileKind: string;
   barNumber: string | null;
   practiceAreas: string;
   biographyMarkdown: string;
+  experienceMarkdown: string | null;
+  educationMarkdown: string | null;
+  achievementsMarkdown: string | null;
+  professionalHistoryMarkdown: string | null;
+  profileImageUrl: string | null;
   motto: string | null;
   quote: string | null;
   responsibilities: string;
@@ -30,11 +37,18 @@ const attorneySelect = `
   short_title as shortTitle,
   office,
   division,
+  branch,
+  affiliations_json as affiliations,
   status,
   profile_kind as profileKind,
   bar_number as barNumber,
   practice_areas_json as practiceAreas,
   biography_markdown as biographyMarkdown,
+  experience_markdown as experienceMarkdown,
+  education_markdown as educationMarkdown,
+  achievements_markdown as achievementsMarkdown,
+  professional_history_markdown as professionalHistoryMarkdown,
+  profile_image_url as profileImageUrl,
   motto,
   quote,
   responsibilities_json as responsibilities,
@@ -92,7 +106,9 @@ export async function listLawyers(db: Queryable): Promise<AttorneyProfile[] | nu
   try {
     const result = await db
       .prepare(
-        `SELECT ${attorneySelect} FROM attorney_profiles WHERE is_public = 1 AND deleted_at IS NULL ORDER BY sort_order, display_name`
+        `SELECT ${attorneySelect} FROM attorney_profiles
+         WHERE is_public = 1 AND deleted_at IS NULL AND status IN ('published', 'active')
+         ORDER BY sort_order, display_name`
       )
       .all<AttorneyRow>();
     if (result.results.length === 0) return null;
@@ -108,7 +124,9 @@ export async function getLawyerBySlug(db: Queryable, slug: string): Promise<Atto
   try {
     const row = await db
       .prepare(
-        `SELECT ${attorneySelect} FROM attorney_profiles WHERE is_public = 1 AND deleted_at IS NULL AND (profile_slug = ? OR id = ?) LIMIT 1`
+        `SELECT ${attorneySelect} FROM attorney_profiles
+         WHERE is_public = 1 AND deleted_at IS NULL AND status IN ('published', 'active') AND (profile_slug = ? OR id = ?)
+         LIMIT 1`
       )
       .bind(slug, slug)
       .first<AttorneyRow>();
@@ -128,11 +146,18 @@ function mapAttorneyRow(row: AttorneyRow): AttorneyProfile {
     shortTitle: row.shortTitle,
     office: row.office,
     division: row.division,
+    branch: row.branch,
+    affiliations: safeJsonArray(row.affiliations ?? "[]"),
     status: row.status,
     profileKind: row.profileKind === "JUDICIAL_OFFICER" ? "JUDICIAL_OFFICER" : "ATTORNEY",
     barNumber: row.barNumber,
     practiceAreas: safeJsonArray(row.practiceAreas),
     biographyMarkdown: row.biographyMarkdown,
+    experienceMarkdown: row.experienceMarkdown,
+    educationMarkdown: row.educationMarkdown,
+    achievementsMarkdown: row.achievementsMarkdown,
+    professionalHistoryMarkdown: row.professionalHistoryMarkdown,
+    profileImageUrl: row.profileImageUrl,
     motto: row.motto,
     quote: row.quote,
     responsibilities: safeJsonResponsibilities(row.responsibilities),

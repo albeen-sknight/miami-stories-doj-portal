@@ -37,6 +37,8 @@ import type {
   DocketStatus,
   EligibleJudge,
   FaqEntry,
+  ProfessionalProfileAdminRecord,
+  ProfessionalProfileInput,
   TicketTranscriptDetail,
   TicketTranscriptMessage,
   TicketTranscriptSummary
@@ -53,6 +55,7 @@ import {
   authStartUrl,
   bootstrapSession,
   closeDocketEntry,
+  createAdminProfile,
   createAdminFaq,
   createAdminResource,
   createDiscordTicket,
@@ -90,6 +93,8 @@ import {
   fetchFaq,
   fetchLawyerProfile,
   fetchLawyers,
+  fetchMyProfessionalProfile,
+  fetchAdminProfiles,
   fetchMe,
   fetchMyRequests,
   fetchPublicDocketDetail,
@@ -100,9 +105,11 @@ import {
   fetchTicketTranscripts,
   importAdminFaq,
   logout as logoutApi,
+  markAdminProfileInactive,
   markBarExamAttempt,
   postDocketToDiscord,
   postDiscordTicketEmbed,
+  publishAdminProfile,
   publishAdminFaq,
   publishAdminResource,
   publishBarExamVersion,
@@ -120,7 +127,10 @@ import {
   unpublishBarExamVersion,
   unpublishDocketEntry,
   updateAdminFaq,
+  updateAdminProfile,
   updateAdminResource,
+  updateMyProfessionalProfile,
+  unpublishAdminProfile,
   updateDocketEntry,
   updateRequestStatus
 } from "./api";
@@ -174,7 +184,8 @@ export function App() {
         <Route path="/faq" element={<Faq />} />
         <Route path="/docket" element={<Docket />} />
         <Route path="/docket/:docketId" element={<PublicDocketDetail />} />
-        <Route path="/lawyers" element={<Lawyers />} />
+        <Route path="/lawyers" element={<Lawyers me={me} loading={authLoading} />} />
+        <Route path="/lawyers/my-profile" element={<ProfessionalProfileEditor me={me} loading={authLoading} />} />
         <Route path="/lawyers/:profileSlug" element={<LawyerProfileDetail />} />
         <Route path="/services" element={<Services />} />
         <Route path="/services/:serviceId" element={<ServiceForm />} />
@@ -199,6 +210,7 @@ export function App() {
         <Route path="/dashboard/transcripts/:transcriptId" element={<TicketTranscriptDetailPage me={me} loading={authLoading} />} />
         <Route path="/dashboard/resources" element={<ResourceManager me={me} loading={authLoading} />} />
         <Route path="/dashboard/faq" element={<FaqManager me={me} loading={authLoading} />} />
+        <Route path="/dashboard/lawyers" element={<ProfileManager me={me} loading={authLoading} />} />
         <Route path="/dashboard/bar" element={<BarAssociationDashboard me={me} loading={authLoading} />} />
         <Route path="/dashboard/judicial" element={<JudicialTools me={me} loading={authLoading} />} />
         <Route path="/dashboard/docket" element={<DocketDashboard me={me} loading={authLoading} />} />
@@ -208,7 +220,7 @@ export function App() {
         <Route path="/dashboard/bar-exam" element={<BarExamReviewDashboard me={me} loading={authLoading} />} />
         <Route path="/dashboard/bar-exam/versions" element={<BarExamVersions me={me} loading={authLoading} />} />
         <Route path="/dashboard/bar-exam/:attemptId" element={<BarExamReviewDetail me={me} loading={authLoading} />} />
-        {dashboardRoutes.filter((path) => !["/dashboard/requests", "/dashboard/discord", "/dashboard/deletion-log", "/dashboard/transcripts", "/dashboard/resources", "/dashboard/faq", "/dashboard/judicial", "/dashboard/docket", "/dashboard/bar", "/dashboard/bar-exam"].includes(path)).map((path) => (
+        {dashboardRoutes.filter((path) => !["/dashboard/requests", "/dashboard/discord", "/dashboard/deletion-log", "/dashboard/transcripts", "/dashboard/resources", "/dashboard/faq", "/dashboard/lawyers", "/dashboard/judicial", "/dashboard/docket", "/dashboard/bar", "/dashboard/bar-exam"].includes(path)).map((path) => (
           <Route key={path} path={path} element={<DashboardShell path={path} me={me} loading={authLoading} onRefresh={setMe} />} />
         ))}
         <Route path="/dashboard/requests/:requestId" element={<StaffRequestDetail me={me} loading={authLoading} />} />
@@ -660,13 +672,6 @@ function Resources() {
   return (
     <>
       <PageHeader eyebrow="Resources" title="Published legal resources" description="Review Miami Stories DOJ procedures, Florida-inspired RP legal standards, courtroom expectations, Bar requirements, and public filing guidance." />
-      <div className="mb-6 rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 p-4 text-sm text-fuchsia-100 shadow-[0_0_24px_rgba(236,72,153,0.18)]">
-  <strong className="text-fuchsia-300">Website under construction:</strong>{" "}
-  Miami Stories DOJ resources are currently being drafted and reviewed. Published documents,
-  templates, procedures, and legal references may be incomplete, outdated, or subject to change.
-  This portal reflects Miami Stories RP procedures and Florida-inspired RP law only. It is not
-  real-world legal advice.
-</div>
       <Content>{loading ? <LoadingState /> : error ? <ErrorState message={error.message} /> : (
         <div className="space-y-8">
           {data?.source === "seed" ? <Badge>Seed fallback</Badge> : <Badge>D1 records</Badge>}
@@ -926,9 +931,31 @@ function registryProfileKindLabel(profile: AttorneyProfile) {
   return profile.profileKind === "JUDICIAL_OFFICER" ? "Judicial Officer" : "Bar Licensed Attorney";
 }
 
-function Lawyers() {
+const PROFESSIONAL_PROFILE_ROLE_IDS = new Set([
+  "1523778635104780429",
+  "1523779395716776016",
+  "1523782369461403888"
+]);
+
+function canUseOwnProfessionalProfile(me: CurrentUserResponse | null): me is Extract<CurrentUserResponse, { authenticated: true }> {
+  return me?.authenticated === true && me.roles.some((role) => PROFESSIONAL_PROFILE_ROLE_IDS.has(role.discordRoleId));
+}
+
+function Lawyers({ me, loading: authLoading }: { me: CurrentUserResponse | null; loading: boolean }) {
   const { data, loading, error } = useAsync(fetchLawyers);
   const profiles = data?.data ?? [];
+  const canManageOwnProfile = !authLoading && canUseOwnProfessionalProfile(me);
+  const [ownProfileStatus, setOwnProfileStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canManageOwnProfile) {
+      setOwnProfileStatus(null);
+      return;
+    }
+    fetchMyProfessionalProfile()
+      .then((result) => setOwnProfileStatus(result.profile?.status ?? null))
+      .catch(() => setOwnProfileStatus(null));
+  }, [canManageOwnProfile]);
 
   return (
     <>
@@ -953,6 +980,13 @@ function Lawyers() {
                 The registry publishes approved attorney profiles and authorized judicial officers whose public listing
                 supports transparency, counsel access, and professional accountability across the Department of Justice.
               </p>
+              {canManageOwnProfile ? (
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <ButtonLink href="/lawyers/my-profile">
+                    {ownProfileStatus && ownProfileStatus !== "draft" ? "Edit My Professional Profile" : "Create My Professional Profile"}
+                  </ButtonLink>
+                </div>
+              ) : null}
             </Card>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -963,6 +997,7 @@ function Lawyers() {
                   className="group block overflow-hidden rounded-md border border-white/10 bg-panel shadow-gold transition hover:border-gold/60"
                 >
                   <div className="border-b border-white/10 bg-black/40 px-5 py-4">
+                    {profile.profileImageUrl ? <img src={profile.profileImageUrl} alt="" className="mb-4 h-20 w-20 rounded-md object-cover ring-1 ring-gold/30" /> : null}
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge>{formatRegistryStatus(profile.status)}</Badge>
                       <Badge>{registryProfileKindLabel(profile)}</Badge>
@@ -1083,9 +1118,14 @@ function LawyerProfileDetail() {
                 </div>
                 <h2 className="mt-5 break-words text-3xl font-semibold">{profile.displayName}</h2>
                 <p className="mt-2 text-lg text-gold">{profile.title}</p>
+                {profile.profileImageUrl ? <img src={profile.profileImageUrl} alt="" className="mt-6 h-40 w-40 rounded-md object-cover ring-1 ring-gold/30" /> : null}
                 <div className="mt-6 space-y-4 text-sm leading-7 text-muted">
                   <Markdown content={profile.biographyMarkdown} />
                 </div>
+                <ProfileMarkdownSection title="Experience" content={profile.experienceMarkdown} />
+                <ProfileMarkdownSection title="Training / education" content={profile.educationMarkdown} />
+                <ProfileMarkdownSection title="DOJ or legal history" content={profile.professionalHistoryMarkdown} />
+                <ProfileMarkdownSection title="Professional achievements" content={profile.achievementsMarkdown} />
                 {profile.motto ? (
                   <div className="mt-8 rounded-md border border-gold/20 bg-gold/5 p-5">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gold">Judicial motto</p>
@@ -1103,6 +1143,10 @@ function LawyerProfileDetail() {
                 <Card>
                   <h3 className="text-lg font-semibold">Office record</h3>
                   <dl className="mt-4 grid gap-3 text-sm">
+                    <div>
+                      <dt className="text-muted">Branch</dt>
+                      <dd className="mt-1 font-medium text-white">{profile.branch ?? profile.division}</dd>
+                    </div>
                     <div>
                       <dt className="text-muted">Office</dt>
                       <dd className="mt-1 font-medium text-white">{profile.office}</dd>
@@ -1173,6 +1217,305 @@ function LawyerProfileDetail() {
   );
 }
 
+interface ProfileFormState {
+  displayName: string;
+  title: string;
+  shortTitle: string;
+  branch: string;
+  office: string;
+  division: string;
+  status: "draft" | "published" | "inactive";
+  profileKind: "JUDICIAL_OFFICER" | "ATTORNEY";
+  barNumber: string;
+  practiceAreasText: string;
+  biographyMarkdown: string;
+  experienceMarkdown: string;
+  educationMarkdown: string;
+  achievementsMarkdown: string;
+  professionalHistoryMarkdown: string;
+  profileImageUrl: string;
+  motto: string;
+  quote: string;
+  responsibilitiesText: string;
+  contact: string;
+  sortOrder: number;
+  discordUserId: string;
+}
+
+const emptyProfileForm: ProfileFormState = {
+  displayName: "",
+  title: "",
+  shortTitle: "",
+  branch: "",
+  office: "",
+  division: "",
+  status: "draft",
+  profileKind: "ATTORNEY",
+  barNumber: "",
+  practiceAreasText: "",
+  biographyMarkdown: "",
+  experienceMarkdown: "",
+  educationMarkdown: "",
+  achievementsMarkdown: "",
+  professionalHistoryMarkdown: "",
+  profileImageUrl: "",
+  motto: "",
+  quote: "",
+  responsibilitiesText: "",
+  contact: "",
+  sortOrder: 100,
+  discordUserId: ""
+};
+
+function ProfessionalProfileEditor({ me, loading }: { me: CurrentUserResponse | null; loading: boolean }) {
+  const [data, setData] = useState<Awaited<ReturnType<typeof fetchMyProfessionalProfile>> | null>(null);
+  const [form, setForm] = useState<ProfileFormState>(emptyProfileForm);
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loading || !me?.authenticated || !canUseOwnProfessionalProfile(me)) return;
+    setBusy(true);
+    setError(null);
+    fetchMyProfessionalProfile()
+      .then((result) => {
+        setData(result);
+        setForm(profileFormFromRecord(result.profile, me.user.displayName, result.primaryBranch));
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Professional profile access failed."))
+      .finally(() => setBusy(false));
+  }, [loading, me]);
+
+  if (loading) return <Content><LoadingState /></Content>;
+  if (!me?.authenticated) return <Navigate to="/login" replace />;
+  if (!canUseOwnProfessionalProfile(me)) return <Navigate to="/unauthorized" replace />;
+  const currentDisplayName = me.user.displayName;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await updateMyProfessionalProfile(profileInputFromForm(form, false));
+      setData(result);
+      setForm(profileFormFromRecord(result.profile, currentDisplayName, result.primaryBranch));
+      setMessage(result.profile?.status === "published" ? "Profile saved and published." : "Profile saved as draft.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Profile save failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <PageHeader eyebrow="Professional Profile" title="Manage your DOJ professional profile" description="Eligible DOJ branch members can maintain their own public legal portfolio. Drafts stay hidden until published." />
+      <Content>
+        {busy ? <LoadingState /> : error && !data ? <ErrorState message={error} /> : (
+          <div className="grid gap-6 lg:grid-cols-[0.7fr_1.3fr]">
+            <Card>
+              <Badge>{data?.profile?.status ?? "draft"}</Badge>
+              <h2 className="mt-4 text-xl font-semibold">Your Professional Profile</h2>
+              <div className="mt-4 space-y-2 text-sm text-muted">
+                <p>Branch: <span className="font-semibold text-white">{data?.primaryBranch ?? "Not eligible"}</span></p>
+                <p>Affiliations: {(data?.affiliations ?? []).join(", ") || "None"}</p>
+                {data?.profile?.status === "published" ? <Link className="font-semibold text-gold hover:text-white" to={`/lawyers/${data.profile.profileSlug}`}>Preview public profile</Link> : null}
+              </div>
+            </Card>
+            <ProfileForm
+              form={form}
+              setForm={setForm}
+              branchOptions={data?.affiliations ?? []}
+              admin={false}
+              submitting={saving}
+              error={error}
+              message={message}
+              submitLabel="Save Professional Profile"
+              onSubmit={submit}
+            />
+          </div>
+        )}
+      </Content>
+    </>
+  );
+}
+
+function ProfileForm({
+  form,
+  setForm,
+  branchOptions,
+  admin,
+  submitting,
+  error,
+  message,
+  submitLabel,
+  onSubmit
+}: {
+  form: ProfileFormState;
+  setForm: Dispatch<SetStateAction<ProfileFormState>>;
+  branchOptions: string[];
+  admin: boolean;
+  submitting: boolean;
+  error: string | null;
+  message: string | null;
+  submitLabel: string;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const set = <K extends keyof ProfileFormState>(key: K, value: ProfileFormState[K]) => setForm((current) => ({ ...current, [key]: value }));
+  const availableBranches = branchOptions.length > 0 ? branchOptions : ["Judicial Branch", "Executive / Prosecutorial Branch", "Defense Branch"];
+  return (
+    <Card>
+      <form className="grid gap-4" onSubmit={onSubmit}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Character/full professional name"><input required className="field" value={form.displayName} onChange={(event) => set("displayName", event.target.value)} /></Field>
+          <Field label="Professional title"><input required className="field" value={form.title} onChange={(event) => set("title", event.target.value)} placeholder="Judge, Prosecutor, Public Defender, Attorney" /></Field>
+          <Field label="Short title"><input className="field" value={form.shortTitle} onChange={(event) => set("shortTitle", event.target.value)} /></Field>
+          <Field label="Branch">
+            <select required className="field" value={form.branch} onChange={(event) => set("branch", event.target.value)}>
+              <option value="">Select branch</option>
+              {availableBranches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+            </select>
+          </Field>
+          <Field label="Office"><input className="field" value={form.office} onChange={(event) => set("office", event.target.value)} /></Field>
+          <Field label="Division"><input className="field" value={form.division} onChange={(event) => set("division", event.target.value)} /></Field>
+          <Field label="Profile kind">
+            <select className="field" value={form.profileKind} onChange={(event) => set("profileKind", event.target.value as ProfileFormState["profileKind"])}>
+              <option value="ATTORNEY">Attorney / Advocate</option>
+              <option value="JUDICIAL_OFFICER">Judicial Officer</option>
+            </select>
+          </Field>
+          <Field label="Status">
+            <select className="field" value={form.status} onChange={(event) => set("status", event.target.value as ProfileFormState["status"])}>
+              <option value="draft">Draft</option>
+              <option value="published">Published</option>
+              {admin ? <option value="inactive">Inactive</option> : null}
+            </select>
+          </Field>
+          <Field label="Bar ID"><input className="field" value={form.barNumber} onChange={(event) => set("barNumber", event.target.value)} /></Field>
+          <Field label="Profile image URL"><input type="url" className="field" value={form.profileImageUrl} onChange={(event) => set("profileImageUrl", event.target.value)} /></Field>
+          {admin ? <Field label="Linked Discord user ID"><input className="field" value={form.discordUserId} onChange={(event) => set("discordUserId", event.target.value)} /></Field> : null}
+          {admin ? <Field label="Sort order"><input type="number" className="field" value={form.sortOrder} onChange={(event) => set("sortOrder", Number(event.target.value))} /></Field> : null}
+        </div>
+        <Field label="Practice areas"><textarea className="field" rows={3} value={form.practiceAreasText} onChange={(event) => set("practiceAreasText", event.target.value)} placeholder="One per line" /></Field>
+        <Field label="Professional biography"><textarea required className="field" rows={7} value={form.biographyMarkdown} onChange={(event) => set("biographyMarkdown", event.target.value)} /></Field>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Experience"><textarea className="field" rows={5} value={form.experienceMarkdown} onChange={(event) => set("experienceMarkdown", event.target.value)} /></Field>
+          <Field label="Training / education"><textarea className="field" rows={5} value={form.educationMarkdown} onChange={(event) => set("educationMarkdown", event.target.value)} /></Field>
+          <Field label="DOJ or legal history"><textarea className="field" rows={5} value={form.professionalHistoryMarkdown} onChange={(event) => set("professionalHistoryMarkdown", event.target.value)} /></Field>
+          <Field label="Professional achievements"><textarea className="field" rows={5} value={form.achievementsMarkdown} onChange={(event) => set("achievementsMarkdown", event.target.value)} /></Field>
+        </div>
+        <Field label="Areas of responsibility"><textarea className="field" rows={5} value={form.responsibilitiesText} onChange={(event) => set("responsibilitiesText", event.target.value)} placeholder="Title: description" /></Field>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Motto"><textarea className="field" rows={3} value={form.motto} onChange={(event) => set("motto", event.target.value)} /></Field>
+          <Field label="Quote"><textarea className="field" rows={3} value={form.quote} onChange={(event) => set("quote", event.target.value)} /></Field>
+        </div>
+        {admin ? <Field label="Internal contact"><input className="field" value={form.contact} onChange={(event) => set("contact", event.target.value)} /></Field> : null}
+        {error ? <p className="rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</p> : null}
+        {message ? <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</p> : null}
+        <button disabled={submitting} className="inline-flex items-center justify-center rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black disabled:opacity-60" type="submit">
+          {submitting ? "Saving..." : submitLabel}
+        </button>
+      </form>
+    </Card>
+  );
+}
+
+function profileFormFromRecord(profile: ProfessionalProfileAdminRecord | null | undefined, fallbackName = "", fallbackBranch: string | null = null): ProfileFormState {
+  if (!profile) {
+    return {
+      ...emptyProfileForm,
+      displayName: fallbackName,
+      branch: fallbackBranch ?? "",
+      division: fallbackBranch ? profileDivisionForBranch(fallbackBranch) : "",
+      profileKind: fallbackBranch === "Judicial Branch" ? "JUDICIAL_OFFICER" : "ATTORNEY"
+    };
+  }
+  return {
+    displayName: profile.displayName,
+    title: profile.title ?? "",
+    shortTitle: profile.shortTitle ?? "",
+    branch: profile.branch ?? fallbackBranch ?? "",
+    office: profile.office ?? "",
+    division: profile.division ?? "",
+    status: profile.status === "published" || profile.status === "inactive" ? profile.status : "draft",
+    profileKind: profile.profileKind,
+    barNumber: profile.barNumber ?? "",
+    practiceAreasText: profile.practiceAreas.join("\n"),
+    biographyMarkdown: profile.biographyMarkdown ?? "",
+    experienceMarkdown: profile.experienceMarkdown ?? "",
+    educationMarkdown: profile.educationMarkdown ?? "",
+    achievementsMarkdown: profile.achievementsMarkdown ?? "",
+    professionalHistoryMarkdown: profile.professionalHistoryMarkdown ?? "",
+    profileImageUrl: profile.profileImageUrl ?? "",
+    motto: profile.motto ?? "",
+    quote: profile.quote ?? "",
+    responsibilitiesText: profile.responsibilities.map((item) => `${item.title}: ${item.description}`).join("\n"),
+    contact: profile.contact ?? "",
+    sortOrder: profile.sortOrder ?? 100,
+    discordUserId: profile.discordUserId ?? ""
+  };
+}
+
+function profileInputFromForm(form: ProfileFormState, admin: boolean): ProfessionalProfileInput {
+  return {
+    displayName: form.displayName,
+    title: form.title,
+    shortTitle: form.shortTitle,
+    branch: form.branch,
+    office: form.office,
+    division: form.division,
+    status: form.status,
+    profileKind: form.profileKind,
+    barNumber: form.barNumber,
+    practiceAreas: splitProfileLines(form.practiceAreasText),
+    biographyMarkdown: form.biographyMarkdown,
+    experienceMarkdown: form.experienceMarkdown,
+    educationMarkdown: form.educationMarkdown,
+    achievementsMarkdown: form.achievementsMarkdown,
+    professionalHistoryMarkdown: form.professionalHistoryMarkdown,
+    profileImageUrl: form.profileImageUrl,
+    motto: form.motto,
+    quote: form.quote,
+    responsibilities: responsibilityLines(form.responsibilitiesText),
+    contact: form.contact,
+    sortOrder: form.sortOrder,
+    discordUserId: admin ? form.discordUserId : undefined
+  };
+}
+
+function splitProfileLines(value: string): string[] {
+  return value.split(/\n|,/).map((item) => item.trim()).filter(Boolean);
+}
+
+function responsibilityLines(value: string) {
+  return value.split("\n").map((line) => {
+    const [title, ...description] = line.split(":");
+    return { title: title.trim(), description: description.join(":").trim() };
+  }).filter((item) => item.title && item.description);
+}
+
+function profileDivisionForBranch(branch: string): string {
+  if (branch === "Judicial Branch") return "Judicial Division";
+  if (branch === "Executive / Prosecutorial Branch") return "Executive / Prosecutorial Division";
+  if (branch === "Defense Branch") return "Defense Division";
+  return "";
+}
+
+function ProfileMarkdownSection({ title, content }: { title: string; content?: string | null }) {
+  if (!content?.trim()) return null;
+  return (
+    <div className="mt-8">
+      <h3 className="text-xl font-semibold">{title}</h3>
+      <div className="mt-3">
+        <Markdown content={content} />
+      </div>
+    </div>
+  );
+}
+
 function Services() {
   return (
     <>
@@ -1208,6 +1551,7 @@ function ServiceForm() {
   const submitInFlight = useRef(false);
   if (!config) return <Navigate to="/services" replace />;
   const formConfig = config;
+  const isLawyerRequest = config.type === "LAWYER";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1253,7 +1597,15 @@ try {
 
   return (
     <>
-      <PageHeader eyebrow={config.type} title={config.title} description={`Request numbers use ${config.prefix}-YYYY-0001 format. Full submitted details go only to a private DOJ ticket-style channel.`} />
+      <PageHeader
+        eyebrow={config.type}
+        title={config.title}
+        description={
+          isLawyerRequest
+            ? `Request numbers use ${config.prefix}-YYYY-0001 format. Only the short public summary may be posted publicly; detailed case information remains restricted to DOJ staff review.`
+            : `Request numbers use ${config.prefix}-YYYY-0001 format. Full submitted details go only to a private DOJ ticket-style channel.`
+        }
+      />
       <Content>
         <div className="grid gap-6 lg:grid-cols-[0.7fr_1.3fr]">
           <Card>
@@ -1264,9 +1616,15 @@ try {
             <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-muted">
               {config.prepare.map((item) => <li key={item}>{item}</li>)}
             </ul>
-            <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm text-gold">
-              Sensitive details are never posted to public request-service channels. If Discord ticket creation fails, the request remains stored for staff retry.
-            </div>
+            {isLawyerRequest ? (
+              <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm leading-6 text-gold">
+                The public summary should be short and general. Do not put a full factual narrative, detailed allegations, phone numbers, addresses, confidential evidence, or unnecessary third-party names in that field.
+              </div>
+            ) : (
+              <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm text-gold">
+                Sensitive details are never posted to public request-service channels. If Discord ticket creation fails, the request remains stored for staff retry.
+              </div>
+            )}
             {config.guidance.map((item) => <p key={item} className="mt-3 text-sm leading-6 text-muted">{item}</p>)}
           </Card>
           <Card>
@@ -1299,15 +1657,30 @@ try {
 ) : (
                       <>
                         {field.label}
+                        {field.help ? <span className="text-xs leading-5 text-muted">{field.help}</span> : null}
                         {field.kind === "textarea" ? (
-                          <textarea name={field.name} required={field.required} rows={4} className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold" />
+                          <textarea
+                            name={field.name}
+                            required={field.required}
+                            rows={4}
+                            maxLength={field.maxLength}
+                            placeholder={field.placeholder}
+                            className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
+                          />
                         ) : field.kind === "select" ? (
                           <select name={field.name} required={field.required} className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold">
                             <option value="">Select</option>
                             {field.options?.map((option) => <option key={option}>{option}</option>)}
                           </select>
                         ) : (
-                          <input name={field.name} required={field.required} type={field.kind === "url" ? "url" : "text"} className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold" />
+                          <input
+                            name={field.name}
+                            required={field.required}
+                            type={field.kind === "url" ? "url" : "text"}
+                            maxLength={field.maxLength}
+                            placeholder={field.placeholder}
+                            className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
+                          />
                         )}
                       </>
                     )}
@@ -2363,7 +2736,7 @@ function prefillFromRequest(detail: Awaited<ReturnType<typeof fetchAdminRequest>
   }
 
   const summaryMarkdown = detail.requestType === "LAWYER"
-    ? `Generated from lawyer request details for ${stringValue(payload, "characterFullName")}. Urgent: ${stringValue(payload, "urgency")}. Description: ${stringValue(payload, "briefDescription")}`
+    ? `Generated from lawyer request ${detail.requestNumber} for ${stringValue(payload, "characterFullName")}. Public summary: ${stringValue(payload, "publicSummary") || detail.shortTitle}. Urgency: ${stringValue(payload, "urgency")}.`
     : `The Court has received ${detail.requestNumber} for judicial review. Public docket text should be finalized by the assigned judicial officer before publication.`;
   const publicNotesMarkdown = detail.requestType === "LAWYER" ? "Brief docket-safe note" : "";
   const privateNotesMarkdown = `Internal note referencing ${detail.requestNumber}`;
@@ -2477,6 +2850,10 @@ function canViewJudicialTools(me: CurrentUserResponse): me is Extract<CurrentUse
 
 function canReviewBarExam(me: CurrentUserResponse): me is Extract<CurrentUserResponse, { authenticated: true }> {
   return me.authenticated && (me.actionPermissions.includes("REVIEW_BAR_EXAMS") || me.actionPermissions.includes("ADMIN"));
+}
+
+function canManageProfiles(me: CurrentUserResponse): me is Extract<CurrentUserResponse, { authenticated: true }> {
+  return me.authenticated && (me.actionPermissions.includes("MANAGE_ATTORNEY_REGISTRY") || me.actionPermissions.includes("ADMIN"));
 }
 
 function canUseDeletionLog(me: CurrentUserResponse | null): me is Extract<CurrentUserResponse, { authenticated: true }> {
@@ -2796,6 +3173,182 @@ function FaqManager({ me, loading }: { me: CurrentUserResponse | null; loading: 
         onClose={() => setDeleteOpen(false)}
         onConfirm={confirmDelete}
       />
+    </>
+  );
+}
+
+function ProfileManager({ me, loading }: { me: CurrentUserResponse | null; loading: boolean }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
+  const [branch, setBranch] = useState("");
+  const [profiles, setProfiles] = useState<ProfessionalProfileAdminRecord[]>([]);
+  const [branches, setBranches] = useState<string[]>(["Judicial Branch", "Executive / Prosecutorial Branch", "Defense Branch"]);
+  const [selected, setSelected] = useState<ProfessionalProfileAdminRecord | null>(null);
+  const [form, setForm] = useState<ProfileFormState>(emptyProfileForm);
+  const [busy, setBusy] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function loadProfiles() {
+    setBusy(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (status) params.set("status", status);
+      if (branch) params.set("branch", branch);
+      const result = await fetchAdminProfiles(params.toString() ? `?${params}` : "");
+      setProfiles(result.data);
+      if (result.branches.length > 0) setBranches(result.branches);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Profile list failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!loading && me?.authenticated && canManageProfiles(me)) void loadProfiles();
+  }, [loading, me, query, status, branch]);
+
+  if (loading) return <Content><LoadingState /></Content>;
+  if (!me?.authenticated) return <Navigate to="/login" replace />;
+  if (!canManageProfiles(me)) return <Navigate to="/unauthorized" replace />;
+
+  function startNew() {
+    setSelected(null);
+    setForm({ ...emptyProfileForm, branch: branches[0] ?? "", division: profileDivisionForBranch(branches[0] ?? "") });
+    setMessage(null);
+    setError(null);
+  }
+
+  function edit(profile: ProfessionalProfileAdminRecord) {
+    setSelected(profile);
+    setForm(profileFormFromRecord(profile));
+    setMessage(null);
+    setError(null);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const input = profileInputFromForm(form, true);
+      const result = selected
+        ? await updateAdminProfile(selected.id, input)
+        : await createAdminProfile(input);
+      setSelected(result.data);
+      setForm(profileFormFromRecord(result.data));
+      setMessage("Professional profile saved.");
+      await loadProfiles();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Profile save failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setProfileStatus(action: "publish" | "unpublish" | "inactive") {
+    if (!selected) return;
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = action === "publish"
+        ? await publishAdminProfile(selected.id)
+        : action === "unpublish"
+          ? await unpublishAdminProfile(selected.id)
+          : await markAdminProfileInactive(selected.id);
+      setSelected(result.data);
+      setForm(profileFormFromRecord(result.data));
+      setMessage(`Profile marked ${result.data.status}.`);
+      await loadProfiles();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Status update failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <PageHeader eyebrow="Dashboard" title="Professional profile management" description="Manage DOJ professional profiles, publication status, branch information, and internal Discord ownership links." />
+      <Content>
+        <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+          <div className="space-y-4">
+            <Card>
+              <div className="grid gap-3 md:grid-cols-3">
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, title, office, Discord" className="field md:col-span-3" />
+                <select value={status} onChange={(event) => setStatus(event.target.value)} className="field">
+                  <option value="">All status</option>
+                  {["draft", "published", "inactive"].map((item) => <option key={item} value={item}>{formatRegistryStatus(item)}</option>)}
+                </select>
+                <select value={branch} onChange={(event) => setBranch(event.target.value)} className="field">
+                  <option value="">All branches</option>
+                  {branches.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <button type="button" onClick={startNew} className="rounded-md bg-gold px-3 py-2 text-sm font-semibold text-black">Create profile</button>
+              </div>
+            </Card>
+            {busy ? <LoadingState /> : (
+              <div className="space-y-3">
+                <p className="text-sm text-muted">Showing {profiles.length} professional profile{profiles.length === 1 ? "" : "s"}</p>
+                {profiles.map((profile) => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    onClick={() => edit(profile)}
+                    className={`block w-full rounded-md border p-4 text-left ${selected?.id === profile.id ? "border-gold bg-gold/10" : "border-white/10 bg-panel hover:border-gold/60"}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge>{formatRegistryStatus(profile.status)}</Badge>
+                      <Badge>{profile.branch ?? "No branch"}</Badge>
+                      {profile.discordUserId ? <Badge>Discord linked</Badge> : null}
+                    </div>
+                    <h3 className="mt-3 text-lg font-semibold">{profile.displayName}</h3>
+                    <p className="text-sm text-muted">{profile.title || "Untitled"} - {profile.office || profile.division || "No office/division"}</p>
+                    <p className="mt-1 break-all text-xs text-muted">Discord: {profile.discordUserId ?? "Unlinked"}</p>
+                  </button>
+                ))}
+                {profiles.length === 0 ? <Card>No profiles match the current filters.</Card> : null}
+              </div>
+            )}
+          </div>
+          <div className="space-y-4">
+            <Card>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <Badge>{selected ? "Editing" : "Creating"}</Badge>
+                  <h2 className="mt-3 text-xl font-semibold">{selected?.displayName ?? "New professional profile"}</h2>
+                  {selected ? <p className="mt-1 text-sm text-muted">Internal profile ID: {selected.id}</p> : null}
+                </div>
+                {selected?.status === "published" ? <ButtonLink href={`/lawyers/${selected.profileSlug}`} variant="ghost">Preview</ButtonLink> : null}
+              </div>
+              {selected ? (
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <button disabled={saving} type="button" onClick={() => void setProfileStatus("publish")} className="rounded-md border border-emerald-400/40 px-3 py-2 text-sm font-semibold text-emerald-200">Publish</button>
+                  <button disabled={saving} type="button" onClick={() => void setProfileStatus("unpublish")} className="rounded-md border border-white/15 px-3 py-2 text-sm font-semibold text-white">Unpublish</button>
+                  <button disabled={saving} type="button" onClick={() => void setProfileStatus("inactive")} className="rounded-md border border-red-500/40 px-3 py-2 text-sm font-semibold text-red-200">Mark inactive</button>
+                </div>
+              ) : null}
+            </Card>
+            <ProfileForm
+              form={form}
+              setForm={setForm}
+              branchOptions={branches}
+              admin
+              submitting={saving}
+              error={error}
+              message={message}
+              submitLabel={selected ? "Save Profile" : "Create Profile"}
+              onSubmit={submit}
+            />
+          </div>
+        </div>
+      </Content>
     </>
   );
 }

@@ -169,7 +169,7 @@ export async function postServiceRequestEmbedToPrivateTicket(
     body: JSON.stringify({
       content,
       allowed_mentions: shouldPing ? allowedMentions(mentions) : allowedMentions({ userIds: [], roleIds: [] }),
-      embeds: [serviceRequestEmbed(request)]
+      embeds: [publicServiceRequestEmbed(request)]
     })
   });
   if (!response.ok) throw await DiscordApiError.fromResponse(response, {
@@ -218,7 +218,7 @@ export async function postServiceRequestEmbedToRequestChannel(
         body: JSON.stringify({
           content: serviceRequestMentionContent(request, mentions, true),
           allowed_mentions: allowedMentions(mentions),
-          embeds: [serviceRequestEmbed(request)]
+          embeds: [publicServiceRequestEmbed(request)]
         })
       });
       if (!repostResponse.ok) throw await DiscordApiError.fromResponse(repostResponse, {
@@ -345,6 +345,32 @@ function serviceRequestEmbed(request: ServiceRequestDetail) {
   };
 }
 
+function publicServiceRequestEmbed(request: ServiceRequestDetail) {
+  const payload = request.payload;
+  const representationType = stringField(payload, "representationType") || request.requestType.replaceAll("_", " ");
+  const urgency = stringField(payload, "urgency") || "Normal";
+  const summary = publicSummaryText(request);
+  const fields = request.requestType === "LAWYER"
+    ? [
+        { name: "Main Party", value: request.mainParty || "Not provided", inline: false },
+        { name: "Representation Type", value: representationType, inline: false },
+        { name: "Public Summary", value: summary, inline: false },
+        { name: "Urgency", value: urgency, inline: true }
+      ]
+    : [
+        { name: "Main Party", value: request.mainParty || "Not provided", inline: false },
+        { name: "Public Summary", value: summary, inline: false },
+        { name: "Status", value: request.status, inline: true }
+      ];
+  return {
+    title: `${request.requestNumber} - ${request.requestType.replaceAll("_", " ")}`,
+    color: DOJ_NEON_PINK,
+    fields,
+    footer: { text: "Public DOJ request notice. Full private details are restricted to authorized DOJ review." },
+    timestamp: request.createdAt
+  };
+}
+
 function serviceRequestMentionContent(request: ServiceRequestDetail, mentions: ServiceRequestMentions, includeMentions: boolean): string {
   const userMentions = includeMentions ? mentions.userIds.map((id) => `<@${id}>`) : [];
   const roleMentions = includeMentions ? mentions.roleIds.map((id) => `<@&${id}>`) : [];
@@ -359,6 +385,23 @@ function allowedMentions(mentions: ServiceRequestMentions) {
     users: mentions.userIds,
     roles: mentions.roleIds
   };
+}
+
+function publicSummaryText(request: ServiceRequestDetail): string {
+  const explicit = stringField(request.payload, "publicSummary") || request.shortTitle;
+  const cleaned = explicit
+    .replace(/<@!?\d{17,20}>/g, "[contact redacted]")
+    .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g, "[phone redacted]")
+    .slice(0, 300)
+    .trim();
+  if (cleaned) return cleaned;
+  const representationType = stringField(request.payload, "representationType") || "legal matter";
+  return `Seeking legal counsel regarding ${representationType.toLowerCase()}.`;
+}
+
+function stringField(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function channelName(request: ServiceRequestDetail): string {

@@ -16,7 +16,10 @@ VALUES
 ('role-chief-public-defender','Chief Public Defender','1457662900192809054','PUBLIC_DEFENDER_CERTIFIED',0),
 ('role-bar-candidate','Bar Candidate','1523782559966953562','BAR_CANDIDATE',0),
 ('role-bar-eligible','Bar Eligible','1523782597820551358','BAR_ELIGIBLE',0),
-('role-civilian','Miami Citizen','1395614223366754397','CIVILIAN',0);
+('role-civilian','Miami Citizen','1395614223366754397','CIVILIAN',0),
+('role-judicial-branch','Judicial Branch','1523778635104780429',NULL,1),
+('role-executive-branch','Executive Branch','1523779395716776016',NULL,1),
+('role-defense-branch','Defense Branch','1523782369461403888',NULL,1);
 
 UPDATE discord_channel_mappings SET discord_channel_id='1523805114630930724', updated_at=CURRENT_TIMESTAMP WHERE mapping_key='BAR_EXAM_SUBMISSIONS';
 UPDATE discord_channel_mappings SET discord_channel_id='1523805013749666019', updated_at=CURRENT_TIMESTAMP WHERE mapping_key='BAR_EXAM_FOLLOWUP_CATEGORY';

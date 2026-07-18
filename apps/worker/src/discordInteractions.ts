@@ -280,6 +280,7 @@ async function requestLawyer(env: Env, ctx: AuthContext, options: Map<string, Op
       preferredRepresentation: "No preference",
       inCustody: "no",
       urgency: stringOption(options, "urgency") || "Normal",
+      publicSummary: "Seeking legal counsel through the DOJ lawyer request process.",
       briefDescription: stringOption(options, "reason") || "Lawyer requested from Discord.",
       preferredContactMethod: stringOption(options, "phone_or_contact") || "Discord",
       notes: stringOption(options, "notes") || ""
