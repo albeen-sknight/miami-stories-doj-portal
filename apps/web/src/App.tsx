@@ -190,7 +190,7 @@ export function App() {
         <Route path="/lawyers/my-profile" element={<ProfessionalProfileEditor me={me} loading={authLoading} />} />
         <Route path="/lawyers/:profileSlug" element={<LawyerProfileDetail me={me} loading={authLoading} />} />
         <Route path="/services" element={<Services />} />
-        <Route path="/services/:serviceId" element={<ServiceForm />} />
+        <Route path="/services/:serviceId" element={<ServiceForm me={me} loading={authLoading} />} />
         <Route path="/requests/mine" element={<MyRequests me={me} loading={authLoading} />} />
         <Route path="/requests/:requestId" element={<RequestDetail me={me} loading={authLoading} />} />
         <Route path="/bar-exam" element={<BarExam me={me} loading={authLoading} />} />
@@ -1551,7 +1551,7 @@ function Services() {
   );
 }
 
-function ServiceForm() {
+function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | null; loading: boolean }) {
   const { serviceId } = useParams();
   const config = serviceId ? requestForms[serviceId as keyof typeof requestForms] : undefined;
   const [submitted, setSubmitted] = useState<null | { id: string; requestNumber: string; discordTicketStatus: string; createdAt: string }>(null);
@@ -1561,10 +1561,16 @@ function ServiceForm() {
   if (!config) return <Navigate to="/services" replace />;
   const formConfig = config;
   const isLawyerRequest = config.type === "LAWYER";
+  const isAuthenticated = me?.authenticated === true;
+  const loginReturnPath = `/services/${serviceId ?? ""}`;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitInFlight.current || submitted) return;
+    if (!isAuthenticated) {
+      setError("You must be logged in with Discord before submitting a DOJ request.");
+      return;
+    }
     const form = event.currentTarget;
     if (!form.checkValidity()) {
       form.reportValidity();
@@ -1647,6 +1653,26 @@ try {
                   <ButtonLink href={`/requests/${submitted.id}`}>View Request</ButtonLink>
                   <ButtonLink href="/requests/mine" variant="ghost">My Requests</ButtonLink>
                 </div>
+              </div>
+            ) : authLoading ? (
+              <LoadingState />
+            ) : !isAuthenticated ? (
+              <div className="space-y-5">
+                <div className="rounded-md border border-gold/40 bg-gold/10 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-gold" />
+                    <div>
+                      <h2 className="text-lg font-semibold text-gold">You must be logged in with Discord to submit a DOJ request.</h2>
+                      <p className="mt-2 text-sm leading-6 text-zinc-200">Open the top-right menu and log in, or click the button below.</p>
+                    </div>
+                  </div>
+                </div>
+                <a
+                  href={authStartUrl(loginReturnPath)}
+                  className="inline-flex w-full items-center justify-center rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black sm:w-auto"
+                >
+                  Log in with Discord
+                </a>
               </div>
             ) : (
               <form className="grid gap-4" onSubmit={submit}>

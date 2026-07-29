@@ -169,7 +169,7 @@ export async function postServiceRequestEmbedToPrivateTicket(
     body: JSON.stringify({
       content,
       allowed_mentions: shouldPing ? allowedMentions(mentions) : allowedMentions({ userIds: [], roleIds: [] }),
-      embeds: [publicServiceRequestEmbed(request)]
+      embeds: [privateServiceRequestEmbed(env, request)]
     })
   });
   if (!response.ok) throw await DiscordApiError.fromResponse(response, {
@@ -198,7 +198,7 @@ export async function postServiceRequestEmbedToRequestChannel(
     body: JSON.stringify({
       content,
       allowed_mentions: shouldPing ? allowedMentions(mentions) : allowedMentions({ userIds: [], roleIds: [] }),
-      embeds: [serviceRequestEmbed(request)]
+      embeds: [publicServiceRequestEmbed(request)]
     })
   });
   if (!response.ok) {
@@ -322,24 +322,47 @@ export async function postAdminLogEmbed(): Promise<never> {
   throw new Error("Admin log embed posting is scaffolded for a later stage.");
 }
 
-function serviceRequestEmbed(request: ServiceRequestDetail) {
-  const payloadLines = Object.entries(request.payload)
-    .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .slice(0, 18)
-    .map(([key, value]) => `**${humanize(key)}:** ${String(value).slice(0, 300)}`)
-    .join("\n");
+function privateServiceRequestEmbed(env: Env, request: ServiceRequestDetail) {
+  const detailChunks = detailFieldChunks(request.payload);
+  const fields = [
+    { name: "Request Number", value: fitFieldValue(request.requestNumber), inline: true },
+    { name: "Status", value: fitFieldValue(request.status), inline: true },
+    { name: "Submitted By Discord", value: fitFieldValue(request.requesterDiscordUsername ?? "Unknown"), inline: true },
+    { name: "Main Party", value: fitFieldValue(request.mainParty || "Not provided"), inline: true },
+    { name: "Document Link", value: fitFieldValue(request.documentUrl ?? "None"), inline: false },
+    { name: "Summary", value: fitFieldValue(request.shortTitle || "No summary"), inline: false }
+  ];
+  const availableDetailSlots = 24 - fields.length;
+  const visibleDetailChunks = detailChunks.slice(0, availableDetailSlots);
+  for (const [index, chunk] of visibleDetailChunks.entries()) {
+    fields.push({
+      name: index === 0 ? "Full Submitted Details" : `Full Submitted Details ${index + 1}`,
+      value: chunk,
+      inline: false
+    });
+  }
+  if (detailChunks.length === 0) {
+    fields.push({ name: "Full Submitted Details", value: "No additional fields.", inline: false });
+  }
+  const truncated = detailChunks.length > visibleDetailChunks.length;
+  const portalUrl = requestPortalUrl(env, request.id);
+  if (portalUrl) {
+    fields.push({
+      name: truncated ? "More Details" : "Portal",
+      value: truncated ? `Details were truncated for Discord embed limits. [View full request in portal](${portalUrl})` : `[View full request in portal](${portalUrl})`,
+      inline: false
+    });
+  } else if (truncated) {
+    fields.push({
+      name: "More Details",
+      value: "Details were truncated for Discord embed limits. Open the request in the DOJ Portal for the complete record.",
+      inline: false
+    });
+  }
   return {
     title: `${request.requestNumber} - ${request.requestType.replaceAll("_", " ")}`,
     color: DOJ_NEON_PINK,
-    fields: [
-      { name: "Request Number", value: request.requestNumber, inline: true },
-      { name: "Status", value: request.status, inline: true },
-      { name: "Submitted By Discord", value: request.requesterDiscordUsername ?? "Unknown", inline: true },
-      { name: "Main Party", value: request.mainParty || "Not provided", inline: true },
-      { name: "Document Link", value: request.documentUrl ?? "None", inline: false },
-      { name: "Summary", value: request.shortTitle || "No summary", inline: false },
-      { name: "Submitted Payload", value: payloadLines.slice(0, 3900) || "No additional fields.", inline: false }
-    ],
+    fields: fields.slice(0, 25),
     footer: { text: "Private DOJ ticket channel. Do not repost full details publicly." },
     timestamp: request.createdAt
   };
@@ -385,6 +408,54 @@ function allowedMentions(mentions: ServiceRequestMentions) {
     users: mentions.userIds,
     roles: mentions.roleIds
   };
+}
+
+function detailFieldChunks(payload: Record<string, unknown>): string[] {
+  const lines = Object.entries(payload)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => `**${humanize(key)}:** ${payloadValue(value)}`);
+  return chunkLines(lines, 1000);
+}
+
+function chunkLines(lines: string[], maxLength: number): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const rawLine of lines) {
+    const line = fitFieldValue(rawLine, maxLength);
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > maxLength && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function payloadValue(value: unknown): string {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) return fitFieldValue(value.map((item) => payloadValue(item)).join(", "), 700);
+  if (value && typeof value === "object") return fitFieldValue(JSON.stringify(value), 700);
+  return fitFieldValue(String(value), 700);
+}
+
+function fitFieldValue(value: string, maxLength = 1024): string {
+  const normalized = value.replaceAll(/[\u0000-\u001f]+/g, " ").replace(/\s+\n/g, "\n").trim();
+  if (!normalized) return "Not provided";
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function requestPortalUrl(env: Env, requestId: string): string | null {
+  const base = env.PUBLIC_APP_URL?.replace(/\/+$/, "");
+  if (!base) return null;
+  try {
+    return new URL(`/requests/${encodeURIComponent(requestId)}`, base).toString();
+  } catch {
+    return null;
+  }
 }
 
 function publicSummaryText(request: ServiceRequestDetail): string {

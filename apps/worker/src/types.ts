@@ -28,6 +28,7 @@ export interface DiscordGuildMember {
   roles: string[];
   nick?: string | null;
   avatar?: string | null;
+  communication_disabled_until?: string | null;
 }
 
 export interface AuthUser {

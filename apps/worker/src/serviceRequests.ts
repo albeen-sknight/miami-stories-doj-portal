@@ -17,8 +17,8 @@ import type {
   ServiceRequestType
 } from "@shotta-doj/shared";
 import { audit } from "./audit";
-import { requireAuth } from "./auth";
-import { avatarUrl, discordApi, requireEnv } from "./discord";
+import { AuthRequiredError, requireAuth } from "./auth";
+import { avatarUrl, discordApi, fetchGuildMember, requireEnv } from "./discord";
 import { errorJson, json } from "./http";
 import { hasActionPermission, requirePermission } from "./permissions";
 import { createServiceRequestTicketChannel, discordDiagnostics, discordFailureDetails, formatDiscordFailure, postServiceRequestEmbedToPrivateTicket, postServiceRequestEmbedToRequestChannel, type ServiceRequestMentions } from "./serviceDiscord";
@@ -54,11 +54,62 @@ const LAWYER_PROFILE_FIELDS = ["lawyerProfileId", "selectedLawyerId", "attorneyP
 const LAWYER_DISCORD_ID_FIELDS = ["lawyerDiscordId", "attorneyDiscordId", "representativeDiscordId", "counselDiscordId"];
 
 export async function createRequest(request: Request, env: Env): Promise<Response> {
-  const ctx = await requireAuth(request, env);
+  let ctx: AuthContext;
+  try {
+    ctx = await requireAuth(request, env);
+  } catch (cause) {
+    if (cause instanceof AuthRequiredError || (cause instanceof Error && cause.name === "AuthRequiredError")) {
+      return errorJson("AUTH_REQUIRED", "You must be logged in with Discord before submitting a DOJ request.", 401);
+    }
+    throw cause;
+  }
+  const moderation = await ensureRequesterCanSubmit(env, ctx);
+  if (!moderation.ok) return errorJson(moderation.code, moderation.message, moderation.status);
   const input = (await request.json()) as CreateServiceRequestInput;
   const result = await createServiceRequestForContext(env, ctx, input);
   if (!result.ok) return errorJson(result.code, result.message, result.status);
   return json({ data: result.data }, { status: 201 });
+}
+
+async function ensureRequesterCanSubmit(env: Env, ctx: AuthContext): Promise<{ ok: true } | { ok: false; code: string; message: string; status: number }> {
+  try {
+    const member = await fetchGuildMember(env, ctx.user.discordId);
+    if (!member) {
+      return {
+        ok: false,
+        code: "DISCORD_MEMBERSHIP_REQUIRED",
+        message: "Your Discord membership could not be verified. Please make sure you are in the Miami Stories Discord server before submitting DOJ requests.",
+        status: 403
+      };
+    }
+    const timeoutUntil = parseDiscordTimeout(member.communication_disabled_until);
+    if (timeoutUntil && timeoutUntil.getTime() > Date.now()) {
+      return {
+        ok: false,
+        code: "DISCORD_TIMEOUT_ACTIVE",
+        message: `You are currently timed out in the Discord server and cannot submit DOJ requests until your timeout expires. Timeout expires: ${timeoutUntil.toISOString()}`,
+        status: 403
+      };
+    }
+    return { ok: true };
+  } catch (cause) {
+    await audit(env, "SERVICE_REQUEST_DISCORD_TIMEOUT_CHECK_FAILED", {
+      discord_id: ctx.user.discordId,
+      reason: cause instanceof Error ? cause.message : String(cause)
+    }, ctx.user.id);
+    return {
+      ok: false,
+      code: "DISCORD_VERIFICATION_FAILED",
+      message: "Discord membership and timeout status could not be verified. Please try again in a few minutes or contact DOJ staff.",
+      status: 502
+    };
+  }
+}
+
+function parseDiscordTimeout(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 export async function createServiceRequestForContext(
