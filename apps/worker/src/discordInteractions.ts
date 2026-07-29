@@ -14,11 +14,12 @@ import type {
   DocketProceedingType,
   DocketStatus,
   LogicalPermission,
+  ServiceRequestDetail,
   ServiceRequestType
 } from "@shotta-doj/shared";
 import { BAR_EXAM_ATTEMPT_STATUSES, DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, DOCKET_STATUSES } from "@shotta-doj/shared";
 import { audit } from "./audit";
-import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, addServiceRequestEvent, closeServiceRequestTicketForContext } from "./serviceRequests";
+import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, getServiceRequestDetailByTicketChannel, addServiceRequestEvent, closeServiceRequestTicketForContext, latestServiceRequestTicketClaim } from "./serviceRequests";
 import { postLawyerSticky } from "./serviceDiscord";
 import { discordApi, requireEnv } from "./discord";
 import { CASE_TYPE_PREFIX } from "./docketDefinitions";
@@ -31,6 +32,12 @@ import type { AuthContext, AuthUser, CachedRole, Env } from "./types";
 
 const EPHEMERAL = 1 << 6;
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const VIEW_CHANNEL = 1024n;
+const SEND_MESSAGES = 2048n;
+const EMBED_LINKS = 16384n;
+const ATTACH_FILES = 32768n;
+const READ_HISTORY = 65536n;
+const TICKET_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_REQUESTS", "ADMIN"];
 
 type InteractionType = 1 | 2 | 3;
 type OptionValue = string | number | boolean;
@@ -72,7 +79,7 @@ interface DiscordInteractionResponse {
 
 interface DiscordComponent {
   type: number;
-  components?: Array<{ type: number; style: number; label: string; custom_id: string }>;
+  components?: Array<{ type: number; style: number; label: string; custom_id?: string; url?: string }>;
 }
 
 export async function discordInteractions(request: Request, env: Env, executionCtx?: ExecutionContext): Promise<Response> {
@@ -155,6 +162,9 @@ async function processCommand(env: Env, interaction: DiscordInteraction): Promis
 
 function handleComponentInteraction(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
   const customId = interaction.data?.custom_id ?? "";
+  if (customId.startsWith("ticket_action:")) {
+    return handleTicketActionComponent(env, interaction, executionCtx);
+  }
   if (!customId.startsWith("ticket_close:")) {
     return loggedInteractionResponse(interaction, messageResponse("Unsupported DOJ ticket action.", true), null);
   }
@@ -175,6 +185,43 @@ function handleComponentInteraction(env: Env, interaction: DiscordInteraction, e
   }
   void work;
   return interactionJson(response);
+}
+
+function handleTicketActionComponent(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
+  const parsed = parseTicketActionCustomId(interaction.data?.custom_id ?? "");
+  if (!parsed) return loggedInteractionResponse(interaction, messageResponse("Unsupported DOJ ticket action.", true), null);
+  if (parsed.action === "close") {
+    return loggedInteractionResponse(interaction, messageResponse("Run `/close` in this ticket to confirm closure with a reason. A transcript will be created before deletion.", true), null);
+  }
+  const response = deferredResponse(true);
+  logInteraction(interaction, response, null);
+  const work = processTicketActionComponent(env, interaction, parsed.action, parsed.requestId);
+  if (executionCtx) {
+    executionCtx.waitUntil(work);
+    return interactionJson(response);
+  }
+  void work;
+  return interactionJson(response);
+}
+
+async function processTicketActionComponent(env: Env, interaction: DiscordInteraction, action: "claim" | "transcript", requestId: string) {
+  try {
+    const ctx = requireAnyPermission(await authContextFromInteraction(env, interaction), TICKET_MANAGEMENT_PERMISSIONS);
+    const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+    if (!detail || detail.id !== requestId) {
+      await editOriginalInteractionResponse(env, interaction, messageResponse("This button is no longer linked to the current private DOJ ticket.", true));
+      return;
+    }
+    const response = action === "claim"
+      ? await claimTicketForDetail(env, ctx, detail, "", "ticket-button-claim")
+      : await transcriptTicketForDetail(env, ctx, detail, "ticket-button-transcript");
+    await editOriginalInteractionResponse(env, interaction, response);
+  } catch (cause) {
+    const response = cause instanceof PermissionError || (cause instanceof Error && cause.name === "PermissionError")
+      ? messageResponse("You do not have permission to use this ticket action.", true)
+      : messageResponse(`Ticket action failed: ${safeError(cause)}`, true);
+    await editOriginalInteractionResponse(env, interaction, response);
+  }
 }
 
 async function processCloseTicketConfirmation(env: Env, interaction: DiscordInteraction, requestId: string, reason: string, commandName: string | null) {
@@ -228,6 +275,7 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
           "**DOJ Staff Commands**",
           "`/create-docket`, `/lookup-request`, `/lookup-docket`, `/lookup-bar-attempt`",
           "`/close`, `/close-ticket`, `/transcript-ticket`, `/delete-ticket`",
+          "`/add-user`, `/add-role`, `/rename-ticket`, `/claim-ticket`, `/unclaim-ticket`",
           "`/delete-record`, `/restore-record`",
           "`/post-faq`, `/post-faq-category`, `/post-resources`, `/post-lawyer-sticky`"
         ].join("\n"),
@@ -253,6 +301,16 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
       return transcriptTicket(env, ctx, interaction, options);
     case "delete-ticket":
       return deleteTicket(env, ctx, interaction, options);
+    case "add-user":
+      return addUserToTicket(env, ctx, interaction, options);
+    case "add-role":
+      return addRoleToTicket(env, ctx, interaction, options);
+    case "rename-ticket":
+      return renameTicket(env, ctx, interaction, options);
+    case "claim-ticket":
+      return claimTicket(env, ctx, interaction, options);
+    case "unclaim-ticket":
+      return unclaimTicket(env, ctx, interaction, options);
     case "delete-record":
       return deleteRecord(env, ctx, options);
     case "restore-record":
@@ -484,6 +542,100 @@ async function deleteTicket(env: Env, ctx: AuthContext, interaction: DiscordInte
   return messageResponse(`Ticket channel deleted after transcript **${transcript.id}** was stored. The portal record was not deleted.`, true);
 }
 
+async function addUserToTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const userId = snowflakeOption(options, "user");
+  if (!userId) return messageResponse("Missing required option: user.", true);
+  const reason = stringOption(options, "reason");
+  const allow = await ticketAccessAllow(env, detail.discordTicketChannelId);
+  await putTicketPermissionOverwrite(env, detail.discordTicketChannelId, userId, 1, allow);
+  const content = withReason(`Added <@${userId}> to this ticket.`, reason);
+  await postTicketMessage(env, detail.discordTicketChannelId, content, { users: [userId] });
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "TICKET_USER_ADDED", "Discord user added to private ticket channel.", {
+    channel_id: detail.discordTicketChannelId,
+    discord_user_id: userId,
+    reason: reason || null,
+    allow_permissions: allow.toString()
+  });
+  await audit(env, "SERVICE_REQUEST_TICKET_USER_ADDED", { request_id: detail.id, channel_id: detail.discordTicketChannelId, discord_user_id: userId, reason: reason || null }, ctx.user.id);
+  return messageResponse(`Added user to **${detail.requestNumber}**.`, true);
+}
+
+async function addRoleToTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const roleId = snowflakeOption(options, "role");
+  if (!roleId) return messageResponse("Missing required option: role.", true);
+  const reason = stringOption(options, "reason");
+  const allow = await ticketAccessAllow(env, detail.discordTicketChannelId);
+  await putTicketPermissionOverwrite(env, detail.discordTicketChannelId, roleId, 0, allow);
+  const content = withReason(`Added <@&${roleId}> to this ticket.`, reason);
+  await postTicketMessage(env, detail.discordTicketChannelId, content, { roles: [roleId] });
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "TICKET_ROLE_ADDED", "Discord role added to private ticket channel.", {
+    channel_id: detail.discordTicketChannelId,
+    discord_role_id: roleId,
+    reason: reason || null,
+    allow_permissions: allow.toString()
+  });
+  await audit(env, "SERVICE_REQUEST_TICKET_ROLE_ADDED", { request_id: detail.id, channel_id: detail.discordTicketChannelId, discord_role_id: roleId, reason: reason || null }, ctx.user.id);
+  return messageResponse(`Added role to **${detail.requestNumber}**.`, true);
+}
+
+async function renameTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const requestedName = stringOption(options, "name");
+  if (!requestedName) return messageResponse("Missing required option: name.", true);
+  const reason = stringOption(options, "reason");
+  const oldChannel = await fetchDiscordChannel(env, detail.discordTicketChannelId);
+  const newName = sanitizeTicketChannelName(requestedName, detail);
+  const response = await discordApi(env, `/channels/${detail.discordTicketChannelId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: newName })
+  });
+  if (!response.ok) throw new Error(`Discord ticket rename failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  await postTicketMessage(env, detail.discordTicketChannelId, withReason(`Ticket renamed to #${newName}.`, reason), {});
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "TICKET_RENAMED", `Ticket renamed to #${newName}.`, {
+    channel_id: detail.discordTicketChannelId,
+    old_name: oldChannel.name ?? null,
+    new_name: newName,
+    reason: reason || null
+  });
+  await audit(env, "SERVICE_REQUEST_TICKET_RENAMED", { request_id: detail.id, channel_id: detail.discordTicketChannelId, old_name: oldChannel.name ?? null, new_name: newName, reason: reason || null }, ctx.user.id);
+  return messageResponse(`Ticket renamed to #${newName}.`, true);
+}
+
+async function claimTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
+  return claimTicketForDetail(env, ctx, detail, stringOption(options, "note"), "claim-ticket");
+}
+
+async function unclaimTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const current = await latestServiceRequestTicketClaim(env, detail.id);
+  if (!current) return messageResponse("This ticket is not currently claimed.", true);
+  const note = stringOption(options, "note");
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "TICKET_UNCLAIMED", "Ticket claim cleared from Discord.", {
+    channel_id: detail.discordTicketChannelId,
+    staffDiscordId: ctx.user.discordId,
+    staffDisplayName: ctx.user.displayName,
+    previousStaffDiscordId: current.staffDiscordId,
+    previousStaffDisplayName: current.staffDisplayName,
+    note: note || null
+  });
+  await postTicketMessage(env, detail.discordTicketChannelId, withReason(`Ticket unclaimed by <@${ctx.user.discordId}>.`, note), { users: [ctx.user.discordId] });
+  await audit(env, "SERVICE_REQUEST_TICKET_UNCLAIMED", { request_id: detail.id, channel_id: detail.discordTicketChannelId, previous_staff_discord_id: current.staffDiscordId, note: note || null }, ctx.user.id);
+  return messageResponse(`Ticket unclaimed for **${detail.requestNumber}**.`, true);
+}
+
 async function deleteRecord(env: Env, ctx: AuthContext, options: Map<string, OptionValue>) {
   const entityType = normalizeEntityType(stringOption(options, "entity_type"));
   const id = stringOption(options, "id_or_number");
@@ -562,6 +714,158 @@ async function postLawyerStickyCommand(env: Env, ctx: AuthContext) {
     result.deletedPrevious ? "Previous sticky deleted." : "No previous sticky was deleted.",
     result.deleteWarning ?? null
   ].filter(Boolean).join("\n"), true);
+}
+
+async function claimTicketForDetail(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, note: string, commandName: string) {
+  if (!detail.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const current = await latestServiceRequestTicketClaim(env, detail.id);
+  if (current && (current.actorUserId === ctx.user.id || current.staffDiscordId === ctx.user.discordId)) {
+    return messageResponse("You already claimed this ticket.", true);
+  }
+  if (current && !canOverrideTicketClaim(ctx)) {
+    return messageResponse(`This ticket is already claimed by ${claimantLabel(current)}.`, true);
+  }
+  const eventType = current ? "TICKET_CLAIM_OVERRIDDEN" : "TICKET_CLAIMED";
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, eventType, current ? "Ticket claim overridden from Discord." : "Ticket claimed from Discord.", {
+    channel_id: detail.discordTicketChannelId,
+    staffDiscordId: ctx.user.discordId,
+    staffDisplayName: ctx.user.displayName,
+    previousStaffDiscordId: current?.staffDiscordId ?? null,
+    previousStaffDisplayName: current?.staffDisplayName ?? null,
+    note: note || null,
+    commandName
+  });
+  await postTicketMessage(env, detail.discordTicketChannelId, withReason(`Ticket claimed by <@${ctx.user.discordId}>.`, note), { users: [ctx.user.discordId] });
+  await audit(env, current ? "SERVICE_REQUEST_TICKET_CLAIM_OVERRIDDEN" : "SERVICE_REQUEST_TICKET_CLAIMED", {
+    request_id: detail.id,
+    channel_id: detail.discordTicketChannelId,
+    staff_discord_id: ctx.user.discordId,
+    previous_staff_discord_id: current?.staffDiscordId ?? null
+  }, ctx.user.id);
+  return messageResponse(
+    current
+      ? `Ticket was claimed by ${claimantLabel(current)}; claim moved to you for **${detail.requestNumber}**.`
+      : `Ticket claimed by you for **${detail.requestNumber}**.`,
+    true
+  );
+}
+
+async function transcriptTicketForDetail(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, commandName: string) {
+  if (!detail.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const target = ticketTargetFromServiceRequest(detail);
+  const transcript = await generateTranscript(env, target, ctx, commandName);
+  const archive = await postTranscriptArchive(env, target, transcript, ctx);
+  return messageResponse(`Transcript stored: **${transcript.id}** (${transcript.messageCount} messages).${archive ? `\nArchive: ${archive}` : "\nArchive channel is not configured."}`, true);
+}
+
+async function linkedServiceTicketDetail(env: Env, channelId: string | undefined): Promise<ServiceRequestDetail | null> {
+  if (!channelId) return null;
+  const detail = await getServiceRequestDetailByTicketChannel(env, channelId);
+  if (!detail?.discordTicketChannelId || detail.discordTicketChannelId !== channelId || detail.discordTicketDeletedAt) return null;
+  return detail;
+}
+
+function linkedTicketOnlyResponse(): DiscordInteractionResponse {
+  return messageResponse("This command only works inside linked private DOJ service request ticket channels.", true);
+}
+
+function requireTicketManagement(ctx: AuthContext) {
+  requireAnyPermission(ctx, TICKET_MANAGEMENT_PERMISSIONS);
+}
+
+function canOverrideTicketClaim(ctx: AuthContext): boolean {
+  return hasActionPermission(ctx, "ADMIN") || hasActionPermission(ctx, "MANAGE_REQUESTS");
+}
+
+function claimantLabel(claim: { staffDiscordId: string | null; staffDisplayName: string }): string {
+  return claim.staffDisplayName || (claim.staffDiscordId ? `Discord user ${claim.staffDiscordId}` : "another staff member");
+}
+
+function snowflakeOption(options: Map<string, OptionValue>, key: string): string {
+  const value = stringOption(options, key);
+  return validDiscordId(value) ? value : "";
+}
+
+async function ticketAccessAllow(env: Env, channelId: string): Promise<bigint> {
+  const channel = await fetchDiscordChannel(env, channelId);
+  let allow = VIEW_CHANNEL | SEND_MESSAGES | READ_HISTORY;
+  if (channelAllowsBit(channel, EMBED_LINKS)) allow |= EMBED_LINKS;
+  if (channelAllowsBit(channel, ATTACH_FILES)) allow |= ATTACH_FILES;
+  return allow;
+}
+
+async function fetchDiscordChannel(env: Env, channelId: string): Promise<DiscordChannelDetails> {
+  const response = await discordApi(env, `/channels/${channelId}`);
+  if (!response.ok) throw new Error(`Discord channel fetch failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  return await response.json() as DiscordChannelDetails;
+}
+
+function channelAllowsBit(channel: DiscordChannelDetails, bit: bigint): boolean {
+  return (channel.permission_overwrites ?? []).some((overwrite) => (permissionBits(overwrite.allow) & bit) === bit);
+}
+
+async function putTicketPermissionOverwrite(env: Env, channelId: string, overwriteId: string, type: 0 | 1, allow: bigint): Promise<void> {
+  const response = await discordApi(env, `/channels/${channelId}/permissions/${overwriteId}`, {
+    method: "PUT",
+    body: JSON.stringify({ type, allow: allow.toString(), deny: "0" })
+  });
+  if (!response.ok) throw new Error(`Discord permission overwrite failed with ${response.status}: ${await responseTextSnippet(response)}`);
+}
+
+async function postTicketMessage(env: Env, channelId: string, content: string, mentions: { users?: string[]; roles?: string[] }): Promise<void> {
+  const response = await discordApi(env, `/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: truncate(content, 1900),
+      allowed_mentions: { parse: [], users: mentions.users ?? [], roles: mentions.roles ?? [] }
+    })
+  });
+  if (!response.ok) throw new Error(`Discord ticket message post failed with ${response.status}: ${await responseTextSnippet(response)}`);
+}
+
+function withReason(message: string, reason: string): string {
+  const cleaned = reason.trim();
+  return cleaned ? `${message}\nReason: ${truncate(cleaned, 500)}` : message;
+}
+
+function sanitizeTicketChannelName(value: string, detail: ServiceRequestDetail): string {
+  const cleaned = value
+    .toLowerCase()
+    .replaceAll(/\s+/g, "-")
+    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "")
+    .slice(0, 90)
+    .replaceAll(/-$/g, "");
+  if (cleaned) return cleaned;
+  return `${detail.requestNumber.toLowerCase()}-ticket`
+    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "")
+    .slice(0, 90);
+}
+
+function ticketTargetFromServiceRequest(detail: ServiceRequestDetail): TicketTarget {
+  return {
+    sourceType: "request",
+    sourceId: detail.id,
+    sourceNumber: detail.requestNumber,
+    channelId: detail.discordTicketChannelId!,
+    channelName: detail.requestNumber.toLowerCase(),
+    requestType: detail.requestType
+  };
+}
+
+function permissionBits(value: string | undefined): bigint {
+  try {
+    return BigInt(value ?? "0");
+  } catch {
+    return 0n;
+  }
+}
+
+async function responseTextSnippet(response: Response): Promise<string> {
+  return (await response.text().catch(() => "")).slice(0, 220);
 }
 
 async function authContextFromInteraction(env: Env, interaction: DiscordInteraction): Promise<AuthContext> {
@@ -735,6 +1039,14 @@ function parseCloseTicketCustomId(customId: string): { action: "confirm" | "canc
   const action = parts[1] === "confirm" || parts[1] === "cancel" ? parts[1] : null;
   if (!action || !/^\d{17,20}$/.test(parts[2]) || !parts[3]) return null;
   return { action, actorDiscordId: parts[2], requestId: parts[3], reasonToken: parts[4] || "", commandName: parts[5] || null };
+}
+
+function parseTicketActionCustomId(customId: string): { action: "claim" | "close" | "transcript"; requestId: string } | null {
+  const parts = customId.split(":");
+  if (parts.length !== 3 || parts[0] !== "ticket_action") return null;
+  const action = parts[1] === "claim" || parts[1] === "close" || parts[1] === "transcript" ? parts[1] : null;
+  if (!action || !parts[2]) return null;
+  return { action, requestId: parts[2] };
 }
 
 function encodeCloseReason(reason: string): string {
@@ -971,6 +1283,23 @@ function truncate(value: string, max: number): string {
 
 function safeError(cause: unknown): string {
   return cause instanceof Error ? cause.message.slice(0, 180) : "Unknown error";
+}
+
+function validDiscordId(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d{17,20}$/.test(value);
+}
+
+interface DiscordChannelDetails {
+  id: string;
+  name?: string;
+  permission_overwrites?: DiscordPermissionOverwrite[];
+}
+
+interface DiscordPermissionOverwrite {
+  id: string;
+  type: 0 | 1;
+  allow?: string;
+  deny?: string;
 }
 
 interface TicketTarget {

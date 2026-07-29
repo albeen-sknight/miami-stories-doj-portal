@@ -50,6 +50,7 @@ const SERVICE_PING_ROLE_NAMES: Partial<Record<ServiceRequestType, string[]>> = {
   MARRIAGE: ["Judicial Branch"],
   DIVORCE: ["Judicial Branch"]
 };
+const PD_HIGH_COMMAND_ROLE_NAME = "PD High Command";
 const LAWYER_PROFILE_FIELDS = ["lawyerProfileId", "selectedLawyerId", "attorneyProfileId", "lawyerProfileSlug", "selectedLawyerSlug", "attorneyBarId", "lawyerBarId", "barNumber"];
 const LAWYER_DISCORD_ID_FIELDS = ["lawyerDiscordId", "attorneyDiscordId", "representativeDiscordId", "counselDiscordId"];
 const LAWYER_SUBTYPES: Record<string, string[]> = {
@@ -555,7 +556,8 @@ export async function closeServiceRequestTicketForContext(env: Env, ctx: AuthCon
 async function createDiscordTicket(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestDetail> {
   try {
     if (detail.discordTicketChannelId) return detail;
-    const roleIds = await accessRoleIds(env, detail);
+    const pdHighCommandRoleId = await pdHighCommandAutoAccessRoleId(env, ctx, detail);
+    const roleIds = await accessRoleIds(env, detail, pdHighCommandRoleId ? [pdHighCommandRoleId] : []);
     const channel = await createServiceRequestTicketChannel(env, detail, {
       categoryId: detail.discordTicketCategoryId ?? "",
       requesterDiscordId: detail.requesterDiscordId ?? ctx.user.discordId,
@@ -575,6 +577,9 @@ async function createDiscordTicket(env: Env, ctx: AuthContext, detail: ServiceRe
       createChannelPayloadSummary: "createChannelPayloadSummary" in channel ? channel.createChannelPayloadSummary : null,
       primaryError: "primaryError" in channel ? channel.primaryError : null
     });
+    if (pdHighCommandRoleId) {
+      await recordPdHighCommandAutoAccess(env, ctx, detail, channel.id, pdHighCommandRoleId);
+    }
     await audit(env, "SERVICE_REQUEST_PRIVATE_CHANNEL_CREATED", { request_id: detail.id, channel_id: channel.id }, ctx.user.id);
   } catch (cause) {
     await markDiscordFailure(env, detail.id, ctx.user.id, "PRIVATE_CHANNEL_FAILED", "SERVICE_REQUEST_PRIVATE_CHANNEL_FAILED", cause);
@@ -642,7 +647,7 @@ async function markServiceRequestClosedOnly(env: Env, requestId: string, ctx: Au
   await audit(env, "SERVICE_REQUEST_CLOSED", { request_id: requestId, reason }, ctx.user.id);
 }
 
-async function getServiceRequestDetailByTicketChannel(env: Env, channelId: string): Promise<ServiceRequestDetail | null> {
+export async function getServiceRequestDetailByTicketChannel(env: Env, channelId: string): Promise<ServiceRequestDetail | null> {
   const row = await env.DB!.prepare("SELECT id FROM service_requests WHERE discord_ticket_channel_id = ? AND deleted_at IS NULL LIMIT 1")
     .bind(channelId)
     .first<{ id: string }>();
@@ -801,6 +806,36 @@ export async function addServiceRequestEvent(
     .run();
 }
 
+export interface ServiceRequestTicketClaim {
+  actorUserId: string | null;
+  staffDiscordId: string | null;
+  staffDisplayName: string;
+  eventType: string;
+  createdAt: string;
+}
+
+export async function latestServiceRequestTicketClaim(env: Env, requestId: string): Promise<ServiceRequestTicketClaim | null> {
+  const row = await env.DB!.prepare(
+    `SELECT actor_user_id as actorUserId, event_type as eventType, metadata_json as metadataJson, created_at as createdAt
+     FROM service_request_events
+     WHERE request_id = ?
+       AND event_type IN ('TICKET_CLAIMED', 'TICKET_CLAIM_OVERRIDDEN', 'TICKET_UNCLAIMED')
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`
+  )
+    .bind(requestId)
+    .first<{ actorUserId: string | null; eventType: string; metadataJson: string; createdAt: string }>();
+  if (!row || row.eventType === "TICKET_UNCLAIMED") return null;
+  const metadata = parsePayload(row.metadataJson);
+  return {
+    actorUserId: row.actorUserId,
+    staffDiscordId: readMetadataString(metadata, "staffDiscordId") || null,
+    staffDisplayName: readMetadataString(metadata, "staffDisplayName") || "another staff member",
+    eventType: row.eventType,
+    createdAt: row.createdAt
+  };
+}
+
 async function nextRequestNumber(env: Env, type: ServiceRequestType, prefix: string): Promise<string> {
   const year = new Date().getUTCFullYear();
   const row = await env.DB!.prepare(
@@ -838,13 +873,75 @@ async function roleIdByName(env: Env, roleName: string): Promise<string | null> 
   return row?.id ?? null;
 }
 
-async function accessRoleIds(env: Env, detail: ServiceRequestDetail): Promise<string[]> {
+async function accessRoleIds(env: Env, detail: ServiceRequestDetail, extraRoleIds: string[] = []): Promise<string[]> {
   const base = await roleIdsByPermissions(env, ["JUDGE", "JUSTICE", "CHIEF_JUSTICE", "ADMIN"]);
   if (detail.requestType === "CRIMINAL_TRIAL" || detail.requestType.includes("WARRANT")) {
     base.push(...(await roleIdsByPermissions(env, ["PROSECUTOR"])));
   }
   const selected = await pingRoleIds(env, detail);
-  return [...new Set([...base, ...selected])];
+  return [...new Set([...base, ...selected, ...extraRoleIds].filter(validDiscordId))];
+}
+
+async function pdHighCommandAutoAccessRoleId(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<string | null> {
+  if (detail.requestType !== "CRIMINAL_TRIAL") return null;
+  const row = await env.DB!.prepare(
+    `SELECT discord_role_id as id
+     FROM role_mappings
+     WHERE lower(role_name) = lower(?)
+       AND length(discord_role_id) BETWEEN 17 AND 20
+       AND discord_role_id NOT GLOB '*[^0-9]*'
+     ORDER BY is_reference_only ASC, updated_at DESC
+     LIMIT 1`
+  )
+    .bind(PD_HIGH_COMMAND_ROLE_NAME)
+    .first<{ id: string | null }>();
+  const roleId = row?.id ?? null;
+  if (!validDiscordId(roleId)) return null;
+  if (ctx.roles.some((role) => role.discordRoleId === roleId)) return roleId;
+  try {
+    const member = await fetchGuildMember(env, ctx.user.discordId);
+    return member?.roles.includes(roleId) ? roleId : null;
+  } catch (cause) {
+    console.warn(JSON.stringify({
+      event: "pd_high_command_role_check_failed",
+      requestId: detail.id,
+      actorUserId: ctx.user.id,
+      cause: safeError(cause)
+    }));
+    return null;
+  }
+}
+
+async function recordPdHighCommandAutoAccess(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, channelId: string, roleId: string): Promise<void> {
+  const message = "PD High Command access was automatically added to this criminal trial ticket because the requester has the PD High Command role.";
+  try {
+    const response = await discordApi(env, `/channels/${channelId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        content: message,
+        allowed_mentions: { parse: [], users: [], roles: [] }
+      })
+    });
+    if (!response.ok) throw new Error(`Discord PD High Command note failed with ${response.status}`);
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "PD_HIGH_COMMAND_AUTO_ADDED", message, {
+      channel_id: channelId,
+      role_id: roleId,
+      request_type: detail.requestType
+    });
+    await audit(env, "SERVICE_REQUEST_PD_HIGH_COMMAND_AUTO_ADDED", { request_id: detail.id, channel_id: channelId, role_id: roleId }, ctx.user.id);
+  } catch (cause) {
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "PD_HIGH_COMMAND_AUTO_ADD_NOTE_FAILED", "PD High Command overwrite was selected, but the private ticket note could not be posted.", {
+      channel_id: channelId,
+      role_id: roleId,
+      reason: safeError(cause)
+    });
+    console.warn(JSON.stringify({
+      event: "pd_high_command_auto_access_note_failed",
+      requestId: detail.id,
+      channelId,
+      cause: safeError(cause)
+    }));
+  }
 }
 
 async function pingRoleIds(env: Env, detail: ServiceRequestDetail): Promise<string[]> {
@@ -1357,6 +1454,11 @@ function parsePayload(value: string): Record<string, unknown> {
 }
 
 function readString(payload: Record<string, unknown>, field: string): string {
+  const value = payload[field];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readMetadataString(payload: Record<string, unknown>, field: string): string {
   const value = payload[field];
   return typeof value === "string" ? value.trim() : "";
 }

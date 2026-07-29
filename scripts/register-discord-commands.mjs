@@ -79,6 +79,40 @@ const commands = [
   ticketCommand("close-ticket", "Confirm, transcript, close, and delete a DOJ service request ticket.", true),
   ticketCommand("transcript-ticket", "Generate and store a private DOJ ticket transcript.", false),
   ticketCommand("delete-ticket", "Transcript then delete a private DOJ ticket channel.", true),
+  {
+    name: "add-user",
+    description: "Add a Discord user to the current private DOJ service ticket.",
+    options: [
+      userOption("user", "User to add to this private ticket.", true),
+      stringOption("reason", "Optional reason for the ticket event log.", false)
+    ]
+  },
+  {
+    name: "add-role",
+    description: "Add a Discord role to the current private DOJ service ticket.",
+    options: [
+      roleOption("role", "Role to add to this private ticket.", true),
+      stringOption("reason", "Optional reason for the ticket event log.", false)
+    ]
+  },
+  {
+    name: "rename-ticket",
+    description: "Rename the current private DOJ service ticket channel.",
+    options: [
+      stringOption("name", "New ticket channel name.", true),
+      stringOption("reason", "Optional reason for the ticket event log.", false)
+    ]
+  },
+  {
+    name: "claim-ticket",
+    description: "Claim the current private DOJ service ticket.",
+    options: [stringOption("note", "Optional claim note.", false)]
+  },
+  {
+    name: "unclaim-ticket",
+    description: "Clear the current private DOJ service ticket claim.",
+    options: [stringOption("note", "Optional unclaim note.", false)]
+  },
   recordCommand("delete-record", "Soft-delete a DOJ Portal record."),
   recordCommand("restore-record", "Restore a soft-deleted DOJ Portal record. Justice/Chief only."),
   { name: "post-faq", description: "Post one public FAQ item to the configured FAQ channel.", options: [stringOption("query", "FAQ ID or question search text.", true)] },
@@ -108,6 +142,14 @@ console.log(`Registered ${registered.length} guild slash commands for guild ${gu
 
 function stringOption(name, description, required) {
   return { type: 3, name, description, required };
+}
+
+function userOption(name, description, required) {
+  return { type: 6, name, description, required };
+}
+
+function roleOption(name, description, required) {
+  return { type: 8, name, description, required };
 }
 
 function boolOption(name, description, required) {

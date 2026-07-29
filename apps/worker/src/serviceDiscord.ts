@@ -57,6 +57,19 @@ interface DiscordMessage {
   };
 }
 
+interface DiscordButtonComponent {
+  type: 2;
+  style: 1 | 2 | 3 | 4 | 5;
+  label: string;
+  custom_id?: string;
+  url?: string;
+}
+
+interface DiscordActionRowComponent {
+  type: 1;
+  components: DiscordButtonComponent[];
+}
+
 export interface LawyerStickyResult {
   ok: boolean;
   action: "posted" | "skipped";
@@ -205,7 +218,8 @@ export async function postServiceRequestEmbedToPrivateTicket(
     body: JSON.stringify({
       content,
       allowed_mentions: shouldPing ? allowedMentions(mentions) : allowedMentions({ userIds: [], roleIds: [] }),
-      embeds: [privateServiceRequestEmbed(env, request)]
+      embeds: [privateServiceRequestEmbed(env, request)],
+      components: privateTicketComponents(env, request)
     })
   });
   if (!response.ok) throw await DiscordApiError.fromResponse(response, {
@@ -550,6 +564,17 @@ function privateServiceRequestEmbed(env: Env, request: ServiceRequestDetail) {
     footer: { text: "Private DOJ ticket channel. Do not repost full details publicly." },
     timestamp: request.createdAt
   };
+}
+
+function privateTicketComponents(env: Env, request: ServiceRequestDetail): DiscordActionRowComponent[] {
+  const components: DiscordButtonComponent[] = [
+    { type: 2, style: 1, label: "Claim", custom_id: `ticket_action:claim:${request.id}` },
+    { type: 2, style: 4, label: "Close", custom_id: `ticket_action:close:${request.id}` },
+    { type: 2, style: 2, label: "Transcript", custom_id: `ticket_action:transcript:${request.id}` }
+  ];
+  const portalUrl = requestPortalUrl(env, request.id);
+  if (portalUrl) components.push({ type: 2, style: 5, label: "View Portal Request", url: portalUrl });
+  return [{ type: 1, components }];
 }
 
 function publicServiceRequestEmbed(request: ServiceRequestDetail) {
