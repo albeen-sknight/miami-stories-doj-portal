@@ -121,11 +121,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
       "A short, general public summary only"
     ],
     guidance: [
-      "Request-a-Lawyer is for legal advice or representation. If you want to formally file a civil case, protective order, permit/licensing issue, contract dispute, restraining/trespass order, or lawsuit, please use the Civil Case Request page instead. You may stay here if you only want to speak with counsel before deciding what to file.",
-      "Formal warrant, search/seizure, subpoena, and expungement requests should use their own DOJ service pages. This page is for counsel or advice related to those issues.",
-      "The public lawyer request gives attorneys only enough context to understand what type of representation may be needed.",
-      "Do not include detailed allegations, incident narratives, sensitive personal information, phone numbers, addresses, confidential evidence, or unnecessary names in the public summary.",
-      "Sensitive details and full case information can be provided privately through the DOJ staff review process after intake."
+      "Use this page to request legal advice or representation. Pick a quick-start option and only include the details needed for DOJ staff to route the request."
     ],
     fields: [
       { name: "characterFullName", label: "Character full name", kind: "text", required: true },

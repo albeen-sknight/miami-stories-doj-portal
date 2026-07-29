@@ -1553,17 +1553,19 @@ interface LawyerPreset {
   label: string;
   description: string;
   values: Record<string, string>;
-  notice?: {
-    title: string;
-    body: string;
-    links: Array<{ label: string; href: string }>;
-  };
 }
 
 interface LawyerPresetNotice {
   preset: LawyerPreset;
-  filled: number;
-  skipped: number;
+  message: string;
+}
+
+type LawyerRouteModalKey = "civil" | "expungement" | "process";
+
+interface LawyerRouteModalConfig {
+  title: string;
+  body: string;
+  links: Array<{ label: string; href: string }>;
 }
 
 const LAWYER_SUBTYPE_OPTIONS: Record<string, string[]> = {
@@ -1688,11 +1690,6 @@ const LAWYER_PRESETS: LawyerPreset[] = [
       urgency: "Normal",
       publicSummary: "I need legal advice about a possible civil matter.",
       briefDescription: "I need counsel/advice about a possible civil issue. I understand formal civil filings should go through the Civil Case Request page. Situation summary: [fill in]."
-    },
-    notice: {
-      title: "Civil filing route",
-      body: "If you want to formally file a civil case, protective order, restraining order, trespass/order request, permit issue, business contract issue, civil lawsuit against PD/government actors, civil lawsuit against another civilian, or another civil filing, please use the Civil Case Request page. You may still use Request-a-Lawyer if you only want legal advice or counsel before deciding whether to file.",
-      links: [{ label: "Go to Civil Case Request", href: "/services/civil-case" }]
     }
   },
   {
@@ -1705,11 +1702,6 @@ const LAWYER_PRESETS: LawyerPreset[] = [
       urgency: "Normal",
       publicSummary: "I need advice about expungement or record relief.",
       briefDescription: "I want to understand whether I may qualify for expungement or record relief before filing. Case/charge history if known: [fill in]."
-    },
-    notice: {
-      title: "Expungement filing route",
-      body: "If you want to formally request expungement or record relief, use the Expungement Request page. You may use Request-a-Lawyer if you want advice before filing.",
-      links: [{ label: "Go to Expungement Request", href: "/services/expungement" }]
     }
   },
   {
@@ -1722,18 +1714,42 @@ const LAWYER_PRESETS: LawyerPreset[] = [
       urgency: "Normal",
       publicSummary: "I need legal advice about a warrant, subpoena, or evidence issue.",
       briefDescription: "I need counsel/advice about a warrant, subpoena, search/seizure issue, evidence request, or related court process. Situation summary: [fill in]."
-    },
-    notice: {
-      title: "Process request routes",
-      body: "If you need to formally request a warrant, search/seizure review, or subpoena, use the proper DOJ service page. This lawyer request page is for legal advice or representation related to those issues.",
-      links: [
-        { label: "Warrant", href: "/services/warrant" },
-        { label: "Search and Seizure", href: "/services/search-seizure" },
-        { label: "Subpoena", href: "/services/subpoena" }
-      ]
     }
   }
 ];
+
+const LAWYER_PRESET_OVERWRITE_FIELDS = new Set([
+  "representationType",
+  "representationSubtype",
+  "urgency",
+  "publicSummary",
+  "briefDescription",
+  "inCustody",
+  "agencyHolding",
+  "preferredRepresentation"
+]);
+
+const LAWYER_ROUTE_MODAL_CONFIGS: Record<LawyerRouteModalKey, LawyerRouteModalConfig> = {
+  civil: {
+    title: "Civil Filing Route",
+    body: "If you want to formally file a civil case, protective order, restraining order, trespass/order request, permit issue, business contract issue, civil lawsuit against PD/government actors, civil lawsuit against another civilian, or another civil filing, please use the Civil Case Request page. You may still use Request-a-Lawyer if you only want legal advice or counsel before deciding whether to file.",
+    links: [{ label: "Go to Civil Case Request", href: `${SITE_URL}/services/civil-case` }]
+  },
+  expungement: {
+    title: "Expungement Filing Route",
+    body: "If you want to formally request expungement or record relief, use the Expungement Request page. You may use Request-a-Lawyer if you want advice before filing.",
+    links: [{ label: "Go to Expungement Request", href: "/services/expungement" }]
+  },
+  process: {
+    title: "Formal Process Route",
+    body: "If you need to formally request a warrant, search/seizure review, or subpoena, use the proper DOJ service page. This lawyer request page is for legal advice or representation related to those issues.",
+    links: [
+      { label: "Go to Warrant Request", href: "/services/warrant" },
+      { label: "Go to Search/Seizure Review", href: "/services/search-seizure" },
+      { label: "Go to Subpoena Request", href: "/services/subpoena" }
+    ]
+  }
+};
 
 function lawyerSubtypeOptions(representationType: string) {
   return LAWYER_SUBTYPE_OPTIONS[representationType] ?? [];
@@ -1755,6 +1771,20 @@ function serviceFieldOptions(field: ServiceField, values: ServiceFormValues, isL
     return lawyerSubtypeOptions(stringFormValue(values, "representationType"));
   }
   return field.options ?? [];
+}
+
+function lawyerRouteModalKeyForValues(values: ServiceFormValues): LawyerRouteModalKey | null {
+  const representationType = stringFormValue(values, "representationType");
+  const representationSubtype = stringFormValue(values, "representationSubtype");
+  if (representationType === "Civil advice") return "civil";
+  if (representationType === "Expungement advice" || representationSubtype.startsWith("Expungement")) return "expungement";
+  if (
+    representationType === "Warrant/subpoena/evidence advice" ||
+    ["Warrant advice", "Search/seizure advice", "Subpoena advice", "Evidence/bodycam/CCTV issue"].includes(representationSubtype)
+  ) {
+    return "process";
+  }
+  return null;
 }
 
 function stringFormValue(values: ServiceFormValues, name: string): string {
@@ -1784,10 +1814,12 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
   const [submitting, setSubmitting] = useState(false);
   const [formValues, setFormValues] = useState<ServiceFormValues>({});
   const [presetNotice, setPresetNotice] = useState<LawyerPresetNotice | null>(null);
+  const [lawyerRouteModalKey, setLawyerRouteModalKey] = useState<LawyerRouteModalKey | null>(null);
   const submitInFlight = useRef(false);
   useEffect(() => {
     setFormValues({});
     setPresetNotice(null);
+    setLawyerRouteModalKey(null);
     setError(null);
     setSubmitted(null);
     submitInFlight.current = false;
@@ -1798,32 +1830,35 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
   const isAuthenticated = me?.authenticated === true;
   const loginReturnPath = `/services/${serviceId ?? ""}`;
   const visibleFields = formConfig.fields.filter((field) => serviceFieldVisible(field, formValues));
+  const selectedLawyerPresetId = presetNotice?.preset.id ?? null;
 
   function updateField(name: string, value: ServiceFormValue) {
-    setFormValues((current) => {
-      const next = { ...current, [name]: value };
-      if (isLawyerRequest && name === "representationType") {
-        const subtype = typeof current.representationSubtype === "string" ? current.representationSubtype : "";
-        if (subtype && !lawyerSubtypeOptions(String(value)).includes(subtype)) next.representationSubtype = "";
-      }
-      return next;
-    });
+    const next = { ...formValues, [name]: value };
+    if (isLawyerRequest && name === "representationType") {
+      const subtype = typeof formValues.representationSubtype === "string" ? formValues.representationSubtype : "";
+      if (subtype && !lawyerSubtypeOptions(String(value)).includes(subtype)) next.representationSubtype = "";
+    }
+    setFormValues(next);
+    if (isLawyerRequest && (name === "representationType" || name === "representationSubtype")) {
+      const routeModalKey = lawyerRouteModalKeyForValues(next);
+      if (routeModalKey) setLawyerRouteModalKey(routeModalKey);
+    }
   }
 
   function applyLawyerPreset(preset: LawyerPreset) {
     const next = { ...formValues };
-    let filled = 0;
-    let skipped = 0;
     for (const [name, value] of Object.entries(preset.values)) {
-      if (emptyFormValue(next[name])) {
+      if (LAWYER_PRESET_OVERWRITE_FIELDS.has(name) || emptyFormValue(next[name])) {
         next[name] = value;
-        filled += 1;
-      } else if (next[name] !== value) {
-        skipped += 1;
       }
     }
     setFormValues(next);
-    setPresetNotice({ preset, filled, skipped });
+    setPresetNotice({
+      preset,
+      message: `Applied preset: ${preset.label}. Updated routing fields and preserved your typed case details.`
+    });
+    const routeModalKey = lawyerRouteModalKeyForValues(next);
+    if (routeModalKey) setLawyerRouteModalKey(routeModalKey);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -1866,6 +1901,36 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
     }
   }
 
+  const lawyerQuickStart = isLawyerRequest && isAuthenticated && !submitted ? (
+    <Card>
+      <p className="text-sm font-semibold text-gold">Quick start</p>
+      <p className="mt-2 text-xs leading-5 text-muted">Pick the closest path. Switching paths updates routing fields and keeps typed case details intact.</p>
+      <div className="mt-3 grid gap-2">
+        {LAWYER_PRESETS.map((preset) => {
+          const selected = selectedLawyerPresetId === preset.id;
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => applyLawyerPreset(preset)}
+              className={`rounded-md border px-3 py-2 text-left transition focus:outline-none ${
+                selected
+                  ? "border-gold bg-gold/15 text-zinc-100 shadow-[0_0_0_1px_rgba(218,165,32,0.45)]"
+                  : "border-white/10 bg-black/30 text-zinc-100 hover:border-gold/60"
+              }`}
+            >
+              <span className="block text-sm font-semibold">{preset.label}</span>
+              <span className="mt-1 block text-xs leading-5 text-muted">{preset.description}</span>
+            </button>
+          );
+        })}
+      </div>
+      {presetNotice ? (
+        <p className="mt-3 rounded-md border border-gold/30 bg-gold/10 p-3 text-xs leading-5 text-gold">{presetNotice.message}</p>
+      ) : null}
+    </Card>
+  ) : null;
+
   return (
     <>
       <PageHeader
@@ -1879,25 +1944,26 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
       />
       <Content>
         <div className="grid gap-6 lg:grid-cols-[0.7fr_1.3fr]">
-          <Card>
-            <config.icon className="h-7 w-7 text-gold" />
-            <h2 className="mt-4 text-xl font-semibold">Before submitting</h2>
-            <p className="mt-3 text-sm leading-6 text-muted">{config.who}</p>
-            {config.templateUrl ? <ExternalAnchor href={config.templateUrl}>Open official template</ExternalAnchor> : null}
-            <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-muted">
-              {config.prepare.map((item) => <li key={item}>{item}</li>)}
-            </ul>
-            {isLawyerRequest ? (
-              <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm leading-6 text-gold">
-                The public summary should be short and general. Do not put a full factual narrative, detailed allegations, phone numbers, addresses, confidential evidence, or unnecessary third-party names in that field.
-              </div>
-            ) : (
-              <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm text-gold">
-                Sensitive details are never posted to public request-service channels. If Discord ticket creation fails, the request remains stored for staff retry.
-              </div>
-            )}
-            {config.guidance.map((item) => <p key={item} className="mt-3 text-sm leading-6 text-muted">{item}</p>)}
-          </Card>
+          <div className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+            <Card>
+              <config.icon className="h-7 w-7 text-gold" />
+              <h2 className="mt-4 text-xl font-semibold">Before submitting</h2>
+              <p className="mt-3 text-sm leading-6 text-muted">{isLawyerRequest ? config.guidance[0] : config.who}</p>
+              {config.templateUrl ? <ExternalAnchor href={config.templateUrl}>Open official template</ExternalAnchor> : null}
+              <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-muted">
+                {config.prepare.map((item) => <li key={item}>{item}</li>)}
+              </ul>
+              {!isLawyerRequest ? (
+                <>
+                  <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm text-gold">
+                    Sensitive details are never posted to public request-service channels. If Discord ticket creation fails, the request remains stored for staff retry.
+                  </div>
+                  {config.guidance.map((item) => <p key={item} className="mt-3 text-sm leading-6 text-muted">{item}</p>)}
+                </>
+              ) : null}
+            </Card>
+            {lawyerQuickStart}
+          </div>
           <Card>
             {submitted ? (
               <div>
@@ -1932,46 +1998,6 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
               </div>
             ) : (
               <form className="grid gap-4" onSubmit={submit}>
-                {isLawyerRequest ? (
-                  <div className="rounded-md border border-white/10 bg-black/30 p-4">
-                    <p className="text-sm font-semibold text-gold">Quick start: what do you need help with?</p>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      {LAWYER_PRESETS.map((preset) => (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() => applyLawyerPreset(preset)}
-                          className="min-h-20 rounded-md border border-white/10 bg-panel/80 px-3 py-3 text-left hover:border-gold/60 focus:border-gold focus:outline-none"
-                        >
-                          <span className="block text-sm font-semibold text-zinc-100">{preset.label}</span>
-                          <span className="mt-1 block text-xs leading-5 text-muted">{preset.description}</span>
-                        </button>
-                      ))}
-                    </div>
-                    {presetNotice ? (
-                      <div className="mt-4 rounded-md border border-gold/30 bg-gold/10 p-3 text-sm leading-6 text-zinc-100">
-                        <p className="font-semibold text-gold">{presetNotice.preset.label}</p>
-                        <p className="text-muted">
-                          Filled {presetNotice.filled} empty field{presetNotice.filled === 1 ? "" : "s"}.
-                          {presetNotice.skipped ? ` Kept ${presetNotice.skipped} existing answer${presetNotice.skipped === 1 ? "" : "s"} unchanged.` : ""}
-                        </p>
-                        {presetNotice.preset.notice ? (
-                          <div className="mt-3">
-                            <p className="font-semibold text-zinc-100">{presetNotice.preset.notice.title}</p>
-                            <p className="mt-1 text-muted">{presetNotice.preset.notice.body}</p>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {presetNotice.preset.notice.links.map((link) => (
-                                <Link key={link.href} to={link.href} className="rounded-md border border-gold/40 px-3 py-2 text-xs font-semibold text-gold hover:bg-gold hover:text-black">
-                                  {link.label}
-                                </Link>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
                 {visibleFields.map((field) => {
                   const required = serviceFieldRequired(field, formValues);
                   const options = serviceFieldOptions(field, formValues, isLawyerRequest);
@@ -2044,7 +2070,36 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
           </Card>
         </div>
       </Content>
+      {lawyerRouteModalKey ? (
+        <LawyerRouteModal config={LAWYER_ROUTE_MODAL_CONFIGS[lawyerRouteModalKey]} onClose={() => setLawyerRouteModalKey(null)} />
+      ) : null}
     </>
+  );
+}
+
+function LawyerRouteModal({ config, onClose }: { config: LawyerRouteModalConfig; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="lawyer-route-modal-title">
+      <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-gold/30 bg-panel p-5 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-gold" />
+          <div>
+            <h2 id="lawyer-route-modal-title" className="text-xl font-semibold text-zinc-100">{config.title}</h2>
+            <p className="mt-3 text-sm leading-6 text-muted">{config.body}</p>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <button type="button" onClick={onClose} className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black">
+            I understand, continue here
+          </button>
+          {config.links.map((link) => (
+            <a key={link.href} href={link.href} className="rounded-md border border-gold/40 px-4 py-3 text-center text-sm font-semibold text-gold hover:bg-gold hover:text-black">
+              {link.label}
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
