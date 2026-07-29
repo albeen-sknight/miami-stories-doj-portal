@@ -121,7 +121,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
       "A short, general public summary only"
     ],
     guidance: [
-      "Use this page to request legal advice or representation. Pick a quick-start option and only include the details needed for DOJ staff to route the request."
+      "Use this page to request legal advice or representation. Pick a quick-start option, then complete only the fields that apply."
     ],
     fields: [
       { name: "characterFullName", label: "Character full name", kind: "text", required: true },

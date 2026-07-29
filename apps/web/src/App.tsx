@@ -1568,6 +1568,13 @@ interface LawyerRouteModalConfig {
   links: Array<{ label: string; href: string }>;
 }
 
+interface LawyerGuidanceModalConfig {
+  title: string;
+  body: string;
+  primaryLabel: string;
+  links?: Array<{ label: string; href: string }>;
+}
+
 const LAWYER_SUBTYPE_OPTIONS: Record<string, string[]> = {
   "Criminal / Cellside": [
     "Currently detained / in cells",
@@ -1729,20 +1736,26 @@ const LAWYER_PRESET_OVERWRITE_FIELDS = new Set([
   "preferredRepresentation"
 ]);
 
+const LAWYER_INTRO_MODAL: LawyerGuidanceModalConfig = {
+  title: "Before You Submit",
+  body: "Request-a-Lawyer is for legal advice or representation.\n\nThe public summary should be short and general. Do not include detailed allegations, full incident narratives, phone numbers, addresses, confidential evidence, or unnecessary third-party names in the public summary.\n\nUse the private details field for information DOJ staff may need to route the request.",
+  primaryLabel: "I understand"
+};
+
 const LAWYER_ROUTE_MODAL_CONFIGS: Record<LawyerRouteModalKey, LawyerRouteModalConfig> = {
   civil: {
     title: "Civil Filing Route",
-    body: "If you want to formally file a civil case, protective order, restraining order, trespass/order request, permit issue, business contract issue, civil lawsuit against PD/government actors, civil lawsuit against another civilian, or another civil filing, please use the Civil Case Request page. You may still use Request-a-Lawyer if you only want legal advice or counsel before deciding whether to file.",
+    body: "Request-a-Lawyer is for legal advice or representation.\n\nIf you want to formally file a civil case, protective order, permit/licensing issue, contract dispute, restraining/trespass order, or lawsuit, please use the Civil Case Request page instead.\n\nYou may stay here if you only want to speak with counsel before deciding what to file.",
     links: [{ label: "Go to Civil Case Request", href: `${SITE_URL}/services/civil-case` }]
   },
   expungement: {
     title: "Expungement Filing Route",
-    body: "If you want to formally request expungement or record relief, use the Expungement Request page. You may use Request-a-Lawyer if you want advice before filing.",
+    body: "If you want to formally request expungement or record relief, use the Expungement Request page.\n\nYou may stay here if you only want legal advice before filing.",
     links: [{ label: "Go to Expungement Request", href: "/services/expungement" }]
   },
   process: {
     title: "Formal Process Route",
-    body: "If you need to formally request a warrant, search/seizure review, or subpoena, use the proper DOJ service page. This lawyer request page is for legal advice or representation related to those issues.",
+    body: "If you need to formally request a warrant, search/seizure review, subpoena, or evidence process, use the proper DOJ service page.\n\nYou may stay here if you only want legal advice or representation related to those issues.",
     links: [
       { label: "Go to Warrant Request", href: "/services/warrant" },
       { label: "Go to Search/Seizure Review", href: "/services/search-seizure" },
@@ -1806,6 +1819,36 @@ function payloadFromVisibleFields(fields: ServiceField[], values: ServiceFormVal
   return payload;
 }
 
+function useDialogFocus<T extends HTMLElement>(open: boolean, onClose: () => void, closeOnEscape = true) {
+  const dialogRef = useRef<T | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusTimer = window.setTimeout(() => {
+      const focusTarget = dialogRef.current?.querySelector<HTMLElement>(
+        "[data-autofocus], button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+      );
+      focusTarget?.focus();
+    }, 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && closeOnEscape) {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [open, closeOnEscape, onClose]);
+
+  return dialogRef;
+}
+
 function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | null; loading: boolean }) {
   const { serviceId } = useParams();
   const config = serviceId ? requestForms[serviceId as keyof typeof requestForms] : undefined;
@@ -1815,11 +1858,13 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
   const [formValues, setFormValues] = useState<ServiceFormValues>({});
   const [presetNotice, setPresetNotice] = useState<LawyerPresetNotice | null>(null);
   const [lawyerRouteModalKey, setLawyerRouteModalKey] = useState<LawyerRouteModalKey | null>(null);
+  const [lawyerIntroAcknowledged, setLawyerIntroAcknowledged] = useState(false);
   const submitInFlight = useRef(false);
   useEffect(() => {
     setFormValues({});
     setPresetNotice(null);
     setLawyerRouteModalKey(null);
+    setLawyerIntroAcknowledged(false);
     setError(null);
     setSubmitted(null);
     submitInFlight.current = false;
@@ -1831,6 +1876,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
   const loginReturnPath = `/services/${serviceId ?? ""}`;
   const visibleFields = formConfig.fields.filter((field) => serviceFieldVisible(field, formValues));
   const selectedLawyerPresetId = presetNotice?.preset.id ?? null;
+  const showLawyerIntroModal = isLawyerRequest && !authLoading && !submitted && !lawyerIntroAcknowledged;
 
   function updateField(name: string, value: ServiceFormValue) {
     const next = { ...formValues, [name]: value };
@@ -1838,6 +1884,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
       const subtype = typeof formValues.representationSubtype === "string" ? formValues.representationSubtype : "";
       if (subtype && !lawyerSubtypeOptions(String(value)).includes(subtype)) next.representationSubtype = "";
     }
+    if (isLawyerRequest && LAWYER_PRESET_OVERWRITE_FIELDS.has(name)) setPresetNotice(null);
     setFormValues(next);
     if (isLawyerRequest && (name === "representationType" || name === "representationSubtype")) {
       const routeModalKey = lawyerRouteModalKeyForValues(next);
@@ -1943,7 +1990,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
         }
       />
       <Content>
-        <div className="grid gap-6 lg:grid-cols-[0.7fr_1.3fr]">
+        <div className="grid gap-5 lg:grid-cols-[minmax(15rem,18rem)_minmax(0,1fr)] lg:gap-6">
           <div className="space-y-4 lg:sticky lg:top-24 lg:self-start">
             <Card>
               <config.icon className="h-7 w-7 text-gold" />
@@ -2071,29 +2118,62 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
         </div>
       </Content>
       {lawyerRouteModalKey ? (
-        <LawyerRouteModal config={LAWYER_ROUTE_MODAL_CONFIGS[lawyerRouteModalKey]} onClose={() => setLawyerRouteModalKey(null)} />
+        <LawyerGuidanceModal
+          config={{
+            ...LAWYER_ROUTE_MODAL_CONFIGS[lawyerRouteModalKey],
+            primaryLabel: "I understand, continue here"
+          }}
+          id="lawyer-route-guidance-dialog"
+          onClose={() => setLawyerRouteModalKey(null)}
+          closeOnEscape
+        />
+      ) : null}
+      {showLawyerIntroModal ? (
+        <LawyerGuidanceModal
+          config={LAWYER_INTRO_MODAL}
+          id="lawyer-intro-guidance-dialog"
+          onClose={() => setLawyerIntroAcknowledged(true)}
+          closeOnEscape={false}
+        />
       ) : null}
     </>
   );
 }
 
-function LawyerRouteModal({ config, onClose }: { config: LawyerRouteModalConfig; onClose: () => void }) {
+function LawyerGuidanceModal({
+  config,
+  id,
+  onClose,
+  closeOnEscape
+}: {
+  config: LawyerGuidanceModalConfig;
+  id: string;
+  onClose: () => void;
+  closeOnEscape: boolean;
+}) {
+  const dialogRef = useDialogFocus<HTMLDivElement>(true, onClose, closeOnEscape);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="lawyer-route-modal-title">
-      <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-gold/30 bg-panel p-5 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-3 py-4 backdrop-blur-sm sm:px-4 sm:py-6">
+      <div
+        ref={dialogRef}
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-gold/30 bg-panel p-4 shadow-2xl sm:p-5"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+      >
         <div className="flex items-start gap-3">
           <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-gold" />
           <div>
-            <h2 id="lawyer-route-modal-title" className="text-xl font-semibold text-zinc-100">{config.title}</h2>
-            <p className="mt-3 text-sm leading-6 text-muted">{config.body}</p>
+            <h2 id={`${id}-title`} className="text-xl font-semibold text-zinc-100">{config.title}</h2>
+            <p className="mt-3 whitespace-pre-line text-sm leading-6 text-muted">{config.body}</p>
           </div>
         </div>
         <div className="mt-5 grid gap-2 sm:grid-cols-2">
-          <button type="button" onClick={onClose} className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black">
-            I understand, continue here
+          <button type="button" onClick={onClose} data-autofocus className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-panel">
+            {config.primaryLabel}
           </button>
-          {config.links.map((link) => (
-            <a key={link.href} href={link.href} className="rounded-md border border-gold/40 px-4 py-3 text-center text-sm font-semibold text-gold hover:bg-gold hover:text-black">
+          {config.links?.map((link) => (
+            <a key={link.href} href={link.href} className="rounded-md border border-gold/40 px-4 py-3 text-center text-sm font-semibold text-gold hover:bg-gold hover:text-black focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-panel">
               {link.label}
             </a>
           ))}
@@ -5368,6 +5448,7 @@ function JudgeAssignModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const dialogRef = useDialogFocus<HTMLDivElement>(open, onClose, true);
 
   useEffect(() => {
     if (open) {
@@ -5409,9 +5490,15 @@ function JudgeAssignModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4">
-      <div className="w-full max-w-lg rounded-md border border-white/10 bg-panel p-6 shadow-2xl">
-        <h2 className="text-xl font-semibold">{currentJudgeName ? "Reassign judge" : "Assign judge"}</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-3 py-4 backdrop-blur-sm sm:px-4">
+      <div
+        ref={dialogRef}
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-white/10 bg-panel p-4 shadow-2xl sm:p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="judge-assign-dialog-title"
+      >
+        <h2 id="judge-assign-dialog-title" className="text-xl font-semibold">{currentJudgeName ? "Reassign judge" : "Assign judge"}</h2>
         <p className="mt-3 text-sm leading-6 text-muted">
           {currentJudgeName
             ? `This request is currently assigned to ${currentJudgeName}. Select the Judge-role member who should handle it.`
@@ -5457,7 +5544,7 @@ function JudgeAssignModal({
         {error ? <p className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</p> : null}
         <div className="mt-5 flex flex-wrap justify-end gap-3">
           <button type="button" onClick={onClose} disabled={busy} className="rounded-md border border-white/15 px-4 py-3 text-sm font-semibold text-white">Cancel</button>
-          <button type="button" onClick={() => void submit()} disabled={busy || loading || !selectedJudgeId} className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black disabled:opacity-60">
+          <button type="button" onClick={() => void submit()} disabled={busy || loading || !selectedJudgeId} data-autofocus className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black disabled:opacity-60">
             {busy ? "Saving..." : currentJudgeName ? "Reassign judge" : "Assign judge"}
           </button>
         </div>
@@ -5486,6 +5573,7 @@ function ReasonModal({
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const dialogRef = useDialogFocus<HTMLFormElement>(open, onClose, true);
 
   useEffect(() => {
     if (open) {
@@ -5515,14 +5603,21 @@ function ReasonModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4">
-      <form onSubmit={submit} className="w-full max-w-lg rounded-md border border-white/10 bg-panel p-6 shadow-2xl">
-        <h2 className="text-xl font-semibold">{title}</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-3 py-4 backdrop-blur-sm sm:px-4">
+      <form
+        ref={dialogRef}
+        onSubmit={submit}
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-md border border-white/10 bg-panel p-4 shadow-2xl sm:p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reason-modal-title"
+      >
+        <h2 id="reason-modal-title" className="text-xl font-semibold">{title}</h2>
         <p className="mt-3 text-sm leading-6 text-muted">
           {description}
         </p>
         <Field label={reasonLabel}>
-          <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={5} className="field" required />
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={5} className="field" required data-autofocus />
         </Field>
         {error ? <p className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</p> : null}
         <div className="mt-5 flex flex-wrap justify-end gap-3">

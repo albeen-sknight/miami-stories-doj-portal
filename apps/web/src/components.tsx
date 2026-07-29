@@ -8,7 +8,7 @@
  * ========================================================================== */
 
 import { ArrowRight, ExternalLink, Menu, Scale, X } from "lucide-react";
-import { PropsWithChildren, useEffect, useState } from "react";
+import { PropsWithChildren, useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import type { CurrentUserResponse } from "@shotta-doj/shared";
 import { authStartUrl } from "./api";
@@ -19,6 +19,8 @@ const DISCORD_INVITE_URL = "https://discord.gg/sYt6JWAdx7";
 export function Layout({ children, me, onLogout }: PropsWithChildren<{ me: CurrentUserResponse | null; onLogout: () => void }>) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dashboardOpen, setDashboardOpen] = useState(false);
+  const drawerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement | null>(null);
   const { pathname } = useLocation();
 
   const authenticated = me?.authenticated === true;
@@ -28,11 +30,16 @@ export function Layout({ children, me, onLogout }: PropsWithChildren<{ me: Curre
   useEffect(() => {
     if (!drawerOpen) return;
     if (canViewDashboard) setDashboardOpen(pathname.startsWith("/dashboard"));
+    const focusTimer = window.setTimeout(() => drawerCloseRef.current?.focus(), 0);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setDrawerOpen(false);
     };
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+      drawerButtonRef.current?.focus();
+    };
   }, [drawerOpen]);
 
   return (
@@ -69,6 +76,7 @@ export function Layout({ children, me, onLogout }: PropsWithChildren<{ me: Curre
           </nav>
           {/* Hamburger button visible on all screens */}
           <button
+            ref={drawerButtonRef}
             type="button"
             className="ml-auto inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/15 hover:border-gold/50 lg:ml-2"
             onClick={() => setDrawerOpen(true)}
@@ -95,6 +103,7 @@ export function Layout({ children, me, onLogout }: PropsWithChildren<{ me: Curre
             <div className="mb-4 flex shrink-0 items-center justify-between border-b border-white/10 pb-4">
               <span className="font-semibold text-gold tracking-wide uppercase text-xs">DOJ Portal Menu</span>
               <button 
+                ref={drawerCloseRef}
                 type="button" 
                 onClick={() => setDrawerOpen(false)}
                 className="text-muted hover:text-white"

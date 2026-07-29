@@ -7,6 +7,10 @@
   background: #06111f;
 }
 
+html {
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -37,14 +41,59 @@ button {
   max-width: 100%;
 }
 
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  width: 100%;
+}
+
 input,
 textarea,
 select {
   color-scheme: dark;
 }
 
+a,
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+[role="button"],
+input:not([type="checkbox"]):not([type="radio"]),
+select {
+  min-height: 44px;
+}
+
+textarea {
+  min-height: 104px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  min-height: 1.125rem;
+  min-width: 1.125rem;
+}
+
+:focus-visible {
+  outline: 2px solid #ff2fae;
+  outline-offset: 3px;
+}
+
 @layer components {
   .field {
     @apply w-full max-w-full rounded-md border border-white/10 bg-ink px-3 py-2 outline-none focus:border-gold;
+  }
+}
+
+@media (max-width: 480px) {
+  .shadow-gold {
+    box-shadow:
+      0 0 0 1px rgba(255, 47, 174, 0.22),
+      0 12px 34px rgba(0, 217, 255, 0.10),
+      0 18px 44px rgba(0, 0, 0, 0.38);
   }
 }
