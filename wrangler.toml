@@ -14,6 +14,9 @@ binding = "DB"
 database_name = "miami-stories-doj-db"
 database_id = "ab4e1ef7-512d-456d-893f-e9dbf642331a"
 
+[triggers]
+crons = [ "* * * * *" ]
+
 [vars]
 PUBLIC_APP_URL = "https://miami-stories-doj.pages.dev"
 WORKER_APP_URL = "https://miami-stories-doj-api.natsu-dragneel13576.workers.dev"

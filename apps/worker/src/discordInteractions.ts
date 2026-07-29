@@ -19,6 +19,7 @@ import type {
 import { BAR_EXAM_ATTEMPT_STATUSES, DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, DOCKET_STATUSES } from "@shotta-doj/shared";
 import { audit } from "./audit";
 import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, addServiceRequestEvent, closeServiceRequestTicketForContext } from "./serviceRequests";
+import { postLawyerSticky } from "./serviceDiscord";
 import { discordApi, requireEnv } from "./discord";
 import { CASE_TYPE_PREFIX } from "./docketDefinitions";
 import { errorJson } from "./http";
@@ -228,7 +229,7 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
           "`/create-docket`, `/lookup-request`, `/lookup-docket`, `/lookup-bar-attempt`",
           "`/close`, `/close-ticket`, `/transcript-ticket`, `/delete-ticket`",
           "`/delete-record`, `/restore-record`",
-          "`/post-faq`, `/post-faq-category`, `/post-resources`"
+          "`/post-faq`, `/post-faq-category`, `/post-resources`, `/post-lawyer-sticky`"
         ].join("\n"),
         true
       );
@@ -262,6 +263,8 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
       return postFaqCategory(env, ctx, options);
     case "post-resources":
       return postResources(env, ctx, options);
+    case "post-lawyer-sticky":
+      return postLawyerStickyCommand(env, ctx);
     case "bar-help":
       return handlePublicCommand(env, interaction) ?? messageResponse("Use the DOJ Portal Bar Exam page.", true);
     default:
@@ -277,8 +280,10 @@ async function requestLawyer(env: Env, ctx: AuthContext, options: Map<string, Op
       characterFullName: name,
       citizenId: "Discord slash command",
       representationType: "General legal advice",
+      representationSubtype: "Not sure what to file",
       preferredRepresentation: "No preference",
-      inCustody: "no",
+      topicCategory: "General legal advice",
+      desiredOutcome: "Speak with counsel about legal options.",
       urgency: stringOption(options, "urgency") || "Normal",
       publicSummary: "Seeking legal counsel through the DOJ lawyer request process.",
       briefDescription: stringOption(options, "reason") || "Lawyer requested from Discord.",
@@ -544,6 +549,19 @@ async function postResources(env: Env, ctx: AuthContext, options: Map<string, Op
   if (result.results.length === 0) return messageResponse("No public resources found for that filter.", true);
   for (const row of result.results) await postEmbed(env, channelId, { title: row.title, description: truncate(`${row.description}\n${row.url}`, 3900), footer: { text: row.category } });
   return messageResponse(`Posted ${result.results.length} resources to <#${channelId}>.`, true);
+}
+
+async function postLawyerStickyCommand(env: Env, ctx: AuthContext) {
+  requireAnyPermission(ctx, ["MANAGE_REQUESTS", "MANAGE_DISCORD_CHANNELS", "ADMIN"]);
+  const result = await postLawyerSticky(env, { force: true });
+  if (!result.ok || result.action !== "posted" || !result.channelId) {
+    return messageResponse(result.reason ?? "Lawyer sticky was not posted.", true);
+  }
+  return messageResponse([
+    `Lawyer sticky posted in <#${result.channelId}>.`,
+    result.deletedPrevious ? "Previous sticky deleted." : "No previous sticky was deleted.",
+    result.deleteWarning ?? null
+  ].filter(Boolean).join("\n"), true);
 }
 
 async function authContextFromInteraction(env: Env, interaction: DiscordInteraction): Promise<AuthContext> {

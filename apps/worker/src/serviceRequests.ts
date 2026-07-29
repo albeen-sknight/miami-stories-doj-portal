@@ -52,6 +52,64 @@ const SERVICE_PING_ROLE_NAMES: Partial<Record<ServiceRequestType, string[]>> = {
 };
 const LAWYER_PROFILE_FIELDS = ["lawyerProfileId", "selectedLawyerId", "attorneyProfileId", "lawyerProfileSlug", "selectedLawyerSlug", "attorneyBarId", "lawyerBarId", "barNumber"];
 const LAWYER_DISCORD_ID_FIELDS = ["lawyerDiscordId", "attorneyDiscordId", "representativeDiscordId", "counselDiscordId"];
+const LAWYER_SUBTYPES: Record<string, string[]> = {
+  "Criminal / Cellside": [
+    "Currently detained / in cells",
+    "Interrogation / questioning",
+    "Criminal defense after arrest/charges",
+    "Arrest/jail review"
+  ],
+  "Civil advice": [
+    "Civil matter advice",
+    "Civil lawsuit against PD/government actor",
+    "Civil lawsuit against another civilian",
+    "Civil issue involving PD member",
+    "Protective/restraining order advice",
+    "Trespass/order issue",
+    "Permit/licensing dispute",
+    "Contract/business contract issue",
+    "Property/money dispute",
+    "Other civil advice"
+  ],
+  "General legal advice": [
+    "Not sure what to file",
+    "Need legal opinion",
+    "Need help understanding rights/options",
+    "Expungement advice",
+    "Other"
+  ],
+  "Expungement advice": [
+    "Expungement advice",
+    "Expungement eligibility advice",
+    "Record relief advice",
+    "Prior conviction/charge review",
+    "Other"
+  ],
+  "Warrant/subpoena/evidence advice": [
+    "Warrant/subpoena/evidence advice",
+    "Warrant advice",
+    "Search/seizure advice",
+    "Subpoena advice",
+    "Evidence/bodycam/CCTV issue",
+    "Other"
+  ]
+};
+const LAWYER_CONDITIONAL_REQUIRED: Record<string, string[]> = {
+  "Criminal / Cellside": ["inCustody", "chargesReason"],
+  "Civil advice": ["desiredOutcome"],
+  "General legal advice": ["topicCategory", "desiredOutcome"],
+  "Expungement advice": ["priorChargesCases", "desiredOutcome"],
+  "Warrant/subpoena/evidence advice": ["processInvolved", "legalAdviceNeeded"]
+};
+const LAWYER_FIELD_LABELS: Record<string, string> = {
+  inCustody: "In custody?",
+  chargesReason: "Charges or reason for detention",
+  desiredOutcome: "Desired outcome",
+  topicCategory: "Topic / category",
+  priorChargesCases: "Prior charges / cases",
+  processInvolved: "Which process is involved?",
+  legalAdviceNeeded: "What legal advice is needed?"
+};
 
 export async function createRequest(request: Request, env: Env): Promise<Response> {
   let ctx: AuthContext;
@@ -1167,12 +1225,26 @@ function validateInput(input: CreateServiceRequestInput): { ok: true } | { ok: f
     return { ok: false, message: "Urgency is not valid." };
   }
   if (input.requestType === "LAWYER") {
+    const lawyer = validateLawyerPayload(input.payload);
+    if (!lawyer.ok) return { ok: false, message: lawyer.message };
     const publicSummary = readString(input.payload, "publicSummary");
     if (!publicSummary) return { ok: false, message: "A short public summary is required for lawyer requests." };
     if (publicSummary.length > 240) return { ok: false, message: "Public summary must be 240 characters or less." };
     if (containsPublicContactInfo(publicSummary)) {
       return { ok: false, message: "Public summary cannot include phone numbers, Discord mentions, addresses, or private contact details." };
     }
+  }
+  return { ok: true };
+}
+
+function validateLawyerPayload(payload: Record<string, unknown>): { ok: true } | { ok: false; message: string } {
+  const representationType = readString(payload, "representationType");
+  const subtype = readString(payload, "representationSubtype");
+  const subtypeOptions = LAWYER_SUBTYPES[representationType];
+  if (!subtypeOptions) return { ok: false, message: "Type of representation is not valid." };
+  if (!subtypeOptions.includes(subtype)) return { ok: false, message: "Situation subtype is not valid for the selected representation type." };
+  for (const field of LAWYER_CONDITIONAL_REQUIRED[representationType] ?? []) {
+    if (!readString(payload, field)) return { ok: false, message: `${LAWYER_FIELD_LABELS[field] ?? field} is required for ${representationType}.` };
   }
   return { ok: true };
 }

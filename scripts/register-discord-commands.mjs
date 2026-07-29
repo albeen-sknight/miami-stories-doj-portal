@@ -84,6 +84,7 @@ const commands = [
   { name: "post-faq", description: "Post one public FAQ item to the configured FAQ channel.", options: [stringOption("query", "FAQ ID or question search text.", true)] },
   { name: "post-faq-category", description: "Post public FAQ entries from a category.", options: [stringOption("category", "FAQ category.", true)] },
   { name: "post-resources", description: "Post public resources/templates to the configured resource channel.", options: [stringOption("category", "Optional resource category.", false)] },
+  { name: "post-lawyer-sticky", description: "Repost the lawyer request portal instruction in request-a-lawyer." },
   { name: "bar-help", description: "Show candidate/reviewer Bar Exam help." }
 ];
 

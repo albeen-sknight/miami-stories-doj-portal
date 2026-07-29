@@ -43,11 +43,18 @@ export const divisions = [
 
 export type FieldKind = "text" | "textarea" | "select" | "checkbox" | "url";
 
+export interface ServiceFieldCondition {
+  field: string;
+  values: string[];
+}
+
 export interface ServiceField {
   name: string;
   label: string;
   kind: FieldKind;
   required?: boolean;
+  requiredWhen?: ServiceFieldCondition[];
+  visibleWhen?: ServiceFieldCondition[];
   options?: string[];
   help?: string;
   placeholder?: string;
@@ -80,6 +87,14 @@ export interface ServiceFormDefinition {
 
 const urgencyOptions = ["Emergency / currently detained", "Same day", "Normal"];
 const yesNo = ["yes", "no"];
+const lawyerRepresentationTypes = ["Criminal / Cellside", "Civil advice", "General legal advice", "Expungement advice", "Warrant/subpoena/evidence advice"];
+const criminalRepresentation = [{ field: "representationType", values: ["Criminal / Cellside"] }];
+const civilRepresentation = [{ field: "representationType", values: ["Civil advice"] }];
+const generalRepresentation = [{ field: "representationType", values: ["General legal advice"] }];
+const expungementRepresentation = [{ field: "representationType", values: ["Expungement advice"] }];
+const processRepresentation = [{ field: "representationType", values: ["Warrant/subpoena/evidence advice"] }];
+const nonGeneralCaseNumberRepresentation = [{ field: "representationType", values: ["Criminal / Cellside", "Civil advice", "Expungement advice", "Warrant/subpoena/evidence advice"] }];
+const evidenceRepresentation = [{ field: "representationType", values: ["Criminal / Cellside", "Civil advice", "Warrant/subpoena/evidence advice"] }];
 const templateConfirms: ServiceField[] = [
   { name: "confirmCopy", label: "I made a copy of the template", kind: "checkbox", required: true },
   { name: "confirmRenamed", label: "I renamed it correctly", kind: "checkbox", required: true },
@@ -98,14 +113,16 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     group: "Representation",
     prefix: "LAW",
     icon: UserRoundCheck,
-    who: "Miami Stories residents who need defense counsel, public defender review, private-practitioner support, or legal guidance.",
+    who: "Miami Stories residents seeking legal advice or representation, especially for cellside, interrogation, custody, criminal defense, or legal guidance before deciding what to file.",
     prepare: [
       "Character identity",
-      "Preferred counsel type",
+      "Representation type and situation",
       "Urgency and contact method",
       "A short, general public summary only"
     ],
     guidance: [
+      "Request-a-Lawyer is for legal advice or representation. If you want to formally file a civil case, protective order, permit/licensing issue, contract dispute, restraining/trespass order, or lawsuit, please use the Civil Case Request page instead. You may stay here if you only want to speak with counsel before deciding what to file.",
+      "Formal warrant, search/seizure, subpoena, and expungement requests should use their own DOJ service pages. This page is for counsel or advice related to those issues.",
       "The public lawyer request gives attorneys only enough context to understand what type of representation may be needed.",
       "Do not include detailed allegations, incident narratives, sensitive personal information, phone numbers, addresses, confidential evidence, or unnecessary names in the public summary.",
       "Sensitive details and full case information can be provided privately through the DOJ staff review process after intake."
@@ -113,12 +130,27 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     fields: [
       { name: "characterFullName", label: "Character full name", kind: "text", required: true },
       { name: "citizenId", label: "Citizen ID", kind: "text", required: true },
-      { name: "representationType", label: "Type of representation", kind: "select", required: true, options: ["Cellside / interrogation", "Criminal defense", "Civil matter", "Expungement", "Warrant/subpoena assistance", "General legal advice"] },
+      { name: "representationType", label: "Type of representation", kind: "select", required: true, options: lawyerRepresentationTypes },
+      { name: "representationSubtype", label: "Situation subtype", kind: "select", required: true, options: [] },
       { name: "preferredRepresentation", label: "Preferred representation", kind: "select", required: true, options: ["Public Defender", "Private Defense Attorney", "No preference"] },
-      { name: "inCustody", label: "In custody?", kind: "select", required: true, options: yesNo },
-      { name: "agencyHolding", label: "Agency holding them, if applicable", kind: "text" },
-      { name: "chargesReason", label: "Charges or reason for detention", kind: "textarea" },
-      { name: "caseNumber", label: "Case/arrest/report number, if applicable", kind: "text" },
+      { name: "inCustody", label: "In custody?", kind: "select", requiredWhen: criminalRepresentation, visibleWhen: criminalRepresentation, options: yesNo },
+      { name: "agencyHolding", label: "Agency holding / arresting agency, if applicable", kind: "text", visibleWhen: criminalRepresentation },
+      { name: "chargesReason", label: "Charges or reason for detention", kind: "textarea", requiredWhen: criminalRepresentation, visibleWhen: criminalRepresentation },
+      { name: "arrestingOfficer", label: "Arresting officer, if known", kind: "text", visibleWhen: criminalRepresentation },
+      { name: "opposingParty", label: "Opposing party / respondent, if known", kind: "text", visibleWhen: civilRepresentation },
+      { name: "agencyDepartmentInvolved", label: "Agency or department involved, if applicable", kind: "text", visibleWhen: civilRepresentation },
+      { name: "formalCivilFiled", label: "Is a formal civil case already filed?", kind: "select", visibleWhen: civilRepresentation, options: ["yes", "no", "unknown"] },
+      { name: "topicCategory", label: "Topic / category", kind: "text", requiredWhen: generalRepresentation, visibleWhen: generalRepresentation },
+      { name: "relatedPeopleAgencies", label: "Related people or agencies, if any", kind: "text", visibleWhen: generalRepresentation },
+      { name: "priorChargesCases", label: "Prior charges / cases, if known", kind: "textarea", requiredWhen: expungementRepresentation, visibleWhen: expungementRepresentation },
+      { name: "approximateCaseDate", label: "Date or approximate date of case", kind: "text", visibleWhen: expungementRepresentation },
+      { name: "currentStatus", label: "Current status", kind: "text", visibleWhen: expungementRepresentation },
+      { name: "processInvolved", label: "Which process is involved?", kind: "select", requiredWhen: processRepresentation, visibleWhen: processRepresentation, options: ["Warrant", "Search/seizure", "Subpoena", "Evidence/bodycam/CCTV", "Other"] },
+      { name: "agencyRequestingParty", label: "Agency or requesting party, if known", kind: "text", visibleWhen: processRepresentation },
+      { name: "legalAdviceNeeded", label: "What legal advice is needed?", kind: "textarea", requiredWhen: processRepresentation, visibleWhen: processRepresentation },
+      { name: "desiredOutcome", label: "Desired outcome", kind: "textarea", requiredWhen: [{ field: "representationType", values: ["Civil advice", "General legal advice", "Expungement advice"] }], visibleWhen: [{ field: "representationType", values: ["Civil advice", "General legal advice", "Expungement advice"] }] },
+      { name: "caseNumber", label: "Case / MDT / court / request number, if known", kind: "text", visibleWhen: nonGeneralCaseNumberRepresentation },
+      { name: "evidenceLinks", label: "Related document / evidence / bodycam / report links", kind: "textarea", visibleWhen: evidenceRepresentation },
       { name: "urgency", label: "Urgency", kind: "select", required: true, options: urgencyOptions },
       {
         name: "publicSummary",
@@ -168,9 +200,13 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
     prefix: "CIV",
     icon: BriefcaseBusiness,
 templateUrl: "https://docs.google.com/document/d/1R9qLC1au8b5ri0OZRv41jnmIMiTPETbyHRaIKLiR6R8/edit?usp=sharing",
-    who: "Parties or attorneys filing Miami Stories civil claims using the DOJ civil case template.",
-    prepare: ["Make a copy of the template", "Rename it PLAINTIFF vs. DEFENDANT - CIVIL CASE", "Set permissions to Anyone with the link -> Editor", "Label exhibits Exhibit A, Exhibit B, Exhibit C"],
-    guidance: ["Incomplete filings may be delayed, returned for correction, or dismissed."],
+    who: "Parties or attorneys formally filing civil claims, protective or restraining order requests, trespass/order issues, permit or licensing disputes, contract/business contract matters, civil lawsuits against PD/government actors, civil lawsuits between civilians, or civil issues involving PD members.",
+    prepare: ["Make a copy of the template", "Rename it PLAINTIFF vs. DEFENDANT - CIVIL CASE", "Set permissions to Anyone with the link -> Editor", "Label exhibits Exhibit A, Exhibit B, Exhibit C", "Describe the civil filing route you are requesting"],
+    guidance: [
+      "Use this page for formal civil intake and filings. Request-a-Lawyer is for counsel or advice before deciding what to file.",
+      "Civil filings may include broader civil claims, protective or restraining order requests, trespass/order issues, permit or licensing disputes, contract or business contract disputes, lawsuits involving PD/government actors, lawsuits between civilians, and civil issues involving PD members.",
+      "Incomplete filings may be delayed, returned for correction, or dismissed."
+    ],
     fields: withTemplate([
       { name: "plaintiffFullName", label: "Plaintiff full name", kind: "text", required: true },
       { name: "plaintiffCitizenId", label: "Plaintiff Citizen ID", kind: "text" },

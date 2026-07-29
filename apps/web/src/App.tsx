@@ -139,6 +139,7 @@ import {
 import type { JudicialHistorySearchResponse, JudicialRecord, JudicialRecordInput } from "./api";
 import { Badge, ButtonLink, Card, ErrorState, ExternalAnchor, Layout, LoadingState, Markdown, PageHeader } from "./components";
 import { dashboardRoutes, divisions, requestForms, serviceCards, serviceGroups } from "./data";
+import type { ServiceField } from "./data";
 import { useAsync } from "./hooks";
 import seoRoutes from "./seoRoutes.json";
 
@@ -1551,18 +1552,286 @@ function Services() {
   );
 }
 
+type ServiceFormValue = string | boolean;
+type ServiceFormValues = Record<string, ServiceFormValue>;
+
+interface LawyerPreset {
+  id: string;
+  label: string;
+  description: string;
+  values: Record<string, string>;
+  notice?: {
+    title: string;
+    body: string;
+    links: Array<{ label: string; href: string }>;
+  };
+}
+
+interface LawyerPresetNotice {
+  preset: LawyerPreset;
+  filled: number;
+  skipped: number;
+}
+
+const LAWYER_SUBTYPE_OPTIONS: Record<string, string[]> = {
+  "Criminal / Cellside": [
+    "Currently detained / in cells",
+    "Interrogation / questioning",
+    "Criminal defense after arrest/charges",
+    "Arrest/jail review"
+  ],
+  "Civil advice": [
+    "Civil matter advice",
+    "Civil lawsuit against PD/government actor",
+    "Civil lawsuit against another civilian",
+    "Civil issue involving PD member",
+    "Protective/restraining order advice",
+    "Trespass/order issue",
+    "Permit/licensing dispute",
+    "Contract/business contract issue",
+    "Property/money dispute",
+    "Other civil advice"
+  ],
+  "General legal advice": [
+    "Not sure what to file",
+    "Need legal opinion",
+    "Need help understanding rights/options",
+    "Expungement advice",
+    "Other"
+  ],
+  "Expungement advice": [
+    "Expungement advice",
+    "Expungement eligibility advice",
+    "Record relief advice",
+    "Prior conviction/charge review",
+    "Other"
+  ],
+  "Warrant/subpoena/evidence advice": [
+    "Warrant/subpoena/evidence advice",
+    "Warrant advice",
+    "Search/seizure advice",
+    "Subpoena advice",
+    "Evidence/bodycam/CCTV issue",
+    "Other"
+  ]
+};
+
+const LAWYER_PRESETS: LawyerPreset[] = [
+  {
+    id: "detained",
+    label: "Currently detained / in cells",
+    description: "Arrested or in custody and needs urgent help.",
+    values: {
+      representationType: "Criminal / Cellside",
+      representationSubtype: "Currently detained / in cells",
+      preferredRepresentation: "Public Defender",
+      inCustody: "yes",
+      agencyHolding: "MPD",
+      urgency: "Emergency / currently detained",
+      publicSummary: "I am currently detained and need legal representation.",
+      briefDescription: "I am currently in custody and need an attorney/public defender to assist with cellside representation, charges, questioning, or release review. Charges/reason for detention: [fill in]. Arresting agency/officer if known: [fill in]."
+    }
+  },
+  {
+    id: "questioning",
+    label: "Interrogation / questioning help",
+    description: "Needs counsel before or during questioning.",
+    values: {
+      representationType: "Criminal / Cellside",
+      representationSubtype: "Interrogation / questioning",
+      inCustody: "yes",
+      agencyHolding: "MPD",
+      urgency: "Emergency / currently detained",
+      publicSummary: "I need legal help before or during questioning.",
+      briefDescription: "I am being questioned or expect to be questioned and need counsel before answering questions. Please contact me as soon as possible. Charges/reason if known: [fill in]."
+    }
+  },
+  {
+    id: "criminal-defense",
+    label: "Criminal defense after arrest/charges",
+    description: "Defense counsel for a criminal case or pending charges.",
+    values: {
+      representationType: "Criminal / Cellside",
+      representationSubtype: "Criminal defense after arrest/charges",
+      agencyHolding: "MPD",
+      urgency: "Same day",
+      publicSummary: "I need defense counsel for a criminal matter.",
+      briefDescription: "I need an attorney/public defender for a criminal case or pending charges. Charges/case number if known: [fill in]. What happened: [fill in]."
+    }
+  },
+  {
+    id: "arrest-review",
+    label: "Jailed/arrested without explanation",
+    description: "Needs review of arrest, charges, or custody status.",
+    values: {
+      representationType: "Criminal / Cellside",
+      representationSubtype: "Arrest/jail review",
+      inCustody: "yes",
+      agencyHolding: "MPD",
+      urgency: "Emergency / currently detained",
+      publicSummary: "I believe I was detained without clear explanation and need legal review.",
+      briefDescription: "I believe I was arrested or jailed without clear explanation, or while I was unavailable/out of city. I need counsel to review the arrest, charges, bodycam, custody status, and possible release or case challenge. Charges/reason if known: [fill in]."
+    }
+  },
+  {
+    id: "general-advice",
+    label: "General legal advice / not sure",
+    description: "Unsure what DOJ filing or route fits.",
+    values: {
+      representationType: "General legal advice",
+      representationSubtype: "Not sure what to file",
+      urgency: "Normal",
+      publicSummary: "I need legal advice before deciding what to file.",
+      briefDescription: "I am not sure whether I should file a civil case, criminal complaint, protective order, permit request, contract matter, expungement, or another DOJ request. I would like to speak with counsel about my options. Situation summary: [fill in]."
+    }
+  },
+  {
+    id: "civil-advice",
+    label: "Civil matter advice only",
+    description: "Advice before deciding whether to file a civil request.",
+    values: {
+      representationType: "Civil advice",
+      representationSubtype: "Civil matter advice",
+      urgency: "Normal",
+      publicSummary: "I need legal advice about a possible civil matter.",
+      briefDescription: "I need counsel/advice about a possible civil issue. I understand formal civil filings should go through the Civil Case Request page. Situation summary: [fill in]."
+    },
+    notice: {
+      title: "Civil filing route",
+      body: "If you want to formally file a civil case, protective order, restraining order, trespass/order request, permit issue, business contract issue, civil lawsuit against PD/government actors, civil lawsuit against another civilian, or another civil filing, please use the Civil Case Request page. You may still use Request-a-Lawyer if you only want legal advice or counsel before deciding whether to file.",
+      links: [{ label: "Go to Civil Case Request", href: "/services/civil-case" }]
+    }
+  },
+  {
+    id: "expungement-advice",
+    label: "Expungement advice only",
+    description: "Advice before filing for record relief.",
+    values: {
+      representationType: "Expungement advice",
+      representationSubtype: "Expungement advice",
+      urgency: "Normal",
+      publicSummary: "I need advice about expungement or record relief.",
+      briefDescription: "I want to understand whether I may qualify for expungement or record relief before filing. Case/charge history if known: [fill in]."
+    },
+    notice: {
+      title: "Expungement filing route",
+      body: "If you want to formally request expungement or record relief, use the Expungement Request page. You may use Request-a-Lawyer if you want advice before filing.",
+      links: [{ label: "Go to Expungement Request", href: "/services/expungement" }]
+    }
+  },
+  {
+    id: "process-advice",
+    label: "Warrant/subpoena/evidence assistance",
+    description: "Advice about a warrant, subpoena, or evidence issue.",
+    values: {
+      representationType: "Warrant/subpoena/evidence advice",
+      representationSubtype: "Warrant/subpoena/evidence advice",
+      urgency: "Normal",
+      publicSummary: "I need legal advice about a warrant, subpoena, or evidence issue.",
+      briefDescription: "I need counsel/advice about a warrant, subpoena, search/seizure issue, evidence request, or related court process. Situation summary: [fill in]."
+    },
+    notice: {
+      title: "Process request routes",
+      body: "If you need to formally request a warrant, search/seizure review, or subpoena, use the proper DOJ service page. This lawyer request page is for legal advice or representation related to those issues.",
+      links: [
+        { label: "Warrant", href: "/services/warrant" },
+        { label: "Search and Seizure", href: "/services/search-seizure" },
+        { label: "Subpoena", href: "/services/subpoena" }
+      ]
+    }
+  }
+];
+
+function lawyerSubtypeOptions(representationType: string) {
+  return LAWYER_SUBTYPE_OPTIONS[representationType] ?? [];
+}
+
+function serviceFieldVisible(field: ServiceField, values: ServiceFormValues): boolean {
+  if (!field.visibleWhen?.length) return true;
+  return field.visibleWhen.every((condition) => condition.values.includes(stringFormValue(values, condition.field)));
+}
+
+function serviceFieldRequired(field: ServiceField, values: ServiceFormValues): boolean {
+  if (field.required) return true;
+  if (!field.requiredWhen?.length) return false;
+  return field.requiredWhen.every((condition) => condition.values.includes(stringFormValue(values, condition.field)));
+}
+
+function serviceFieldOptions(field: ServiceField, values: ServiceFormValues, isLawyerRequest: boolean): string[] {
+  if (isLawyerRequest && field.name === "representationSubtype") {
+    return lawyerSubtypeOptions(stringFormValue(values, "representationType"));
+  }
+  return field.options ?? [];
+}
+
+function stringFormValue(values: ServiceFormValues, name: string): string {
+  const value = values[name];
+  return typeof value === "string" ? value : "";
+}
+
+function emptyFormValue(value: ServiceFormValue | undefined): boolean {
+  return value === undefined || value === false || (typeof value === "string" && value.trim() === "");
+}
+
+function payloadFromVisibleFields(fields: ServiceField[], values: ServiceFormValues): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = values[field.name];
+    if (field.kind === "checkbox") payload[field.name] = value === true;
+    else if (typeof value === "string" && value.trim()) payload[field.name] = value.trim();
+  }
+  return payload;
+}
+
 function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | null; loading: boolean }) {
   const { serviceId } = useParams();
   const config = serviceId ? requestForms[serviceId as keyof typeof requestForms] : undefined;
   const [submitted, setSubmitted] = useState<null | { id: string; requestNumber: string; discordTicketStatus: string; createdAt: string }>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [formValues, setFormValues] = useState<ServiceFormValues>({});
+  const [presetNotice, setPresetNotice] = useState<LawyerPresetNotice | null>(null);
   const submitInFlight = useRef(false);
+  useEffect(() => {
+    setFormValues({});
+    setPresetNotice(null);
+    setError(null);
+    setSubmitted(null);
+    submitInFlight.current = false;
+  }, [serviceId]);
   if (!config) return <Navigate to="/services" replace />;
   const formConfig = config;
   const isLawyerRequest = config.type === "LAWYER";
   const isAuthenticated = me?.authenticated === true;
   const loginReturnPath = `/services/${serviceId ?? ""}`;
+  const visibleFields = formConfig.fields.filter((field) => serviceFieldVisible(field, formValues));
+
+  function updateField(name: string, value: ServiceFormValue) {
+    setFormValues((current) => {
+      const next = { ...current, [name]: value };
+      if (isLawyerRequest && name === "representationType") {
+        const subtype = typeof current.representationSubtype === "string" ? current.representationSubtype : "";
+        if (subtype && !lawyerSubtypeOptions(String(value)).includes(subtype)) next.representationSubtype = "";
+      }
+      return next;
+    });
+  }
+
+  function applyLawyerPreset(preset: LawyerPreset) {
+    const next = { ...formValues };
+    let filled = 0;
+    let skipped = 0;
+    for (const [name, value] of Object.entries(preset.values)) {
+      if (emptyFormValue(next[name])) {
+        next[name] = value;
+        filled += 1;
+      } else if (next[name] !== value) {
+        skipped += 1;
+      }
+    }
+    setFormValues(next);
+    setPresetNotice({ preset, filled, skipped });
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1579,30 +1848,24 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
     submitInFlight.current = true;
     setSubmitting(true);
     setError(null);
-const formData = new FormData(form);
-const payload = Object.fromEntries(formData.entries()) as Record<string, unknown>;
-
-for (const field of formConfig.fields) {
-  if (field.kind === "checkbox") {
-    const input = form.elements.namedItem(field.name) as HTMLInputElement | null;
-    payload[field.name] = Boolean(input?.checked);
-  }
-}
-try {
-  const result = await createServiceRequest({
-    requestType: formConfig.type,
-    payload,
-    requesterContact: String(payload.preferredContactMethod ?? payload.contactInfo ?? ""),
-    documentUrl: String(payload.documentUrl ?? "")
-  });
-  setSubmitted({
-    id: result.data.id,
-    requestNumber: result.data.requestNumber,
-    discordTicketStatus: result.data.discordTicketStatus,
-    createdAt: result.data.createdAt
-  });
-  form.reset();
-} catch (cause) {
+    const payload = payloadFromVisibleFields(visibleFields, formValues);
+    try {
+      const result = await createServiceRequest({
+        requestType: formConfig.type,
+        payload,
+        requesterContact: String(payload.preferredContactMethod ?? payload.contactInfo ?? ""),
+        documentUrl: String(payload.documentUrl ?? "")
+      });
+      setSubmitted({
+        id: result.data.id,
+        requestNumber: result.data.requestNumber,
+        discordTicketStatus: result.data.discordTicketStatus,
+        createdAt: result.data.createdAt
+      });
+      form.reset();
+      setFormValues({});
+      setPresetNotice(null);
+    } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Submission failed.");
     } finally {
       submitInFlight.current = false;
@@ -1676,51 +1939,109 @@ try {
               </div>
             ) : (
               <form className="grid gap-4" onSubmit={submit}>
-                {config.fields.map((field) => (
-                  <label key={field.name} className="grid gap-2 text-sm font-medium text-zinc-200">
-                    {field.kind === "checkbox" ? (
-                    <span className="flex gap-3 rounded-md border border-white/10 bg-black p-3">
-                <input
-                name={field.name}
-                type="checkbox"
-                value="true"
-                required={field.required}
-               className="mt-1"
-    />
-    {field.label}
-  </span>
-) : (
-                      <>
-                        {field.label}
-                        {field.help ? <span className="text-xs leading-5 text-muted">{field.help}</span> : null}
-                        {field.kind === "textarea" ? (
-                          <textarea
-                            name={field.name}
-                            required={field.required}
-                            rows={4}
-                            maxLength={field.maxLength}
-                            placeholder={field.placeholder}
-                            className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
-                          />
-                        ) : field.kind === "select" ? (
-                          <select name={field.name} required={field.required} className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold">
-                            <option value="">Select</option>
-                            {field.options?.map((option) => <option key={option}>{option}</option>)}
-                          </select>
-                        ) : (
+                {isLawyerRequest ? (
+                  <div className="rounded-md border border-white/10 bg-black/30 p-4">
+                    <p className="text-sm font-semibold text-gold">Quick start: what do you need help with?</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {LAWYER_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => applyLawyerPreset(preset)}
+                          className="min-h-20 rounded-md border border-white/10 bg-panel/80 px-3 py-3 text-left hover:border-gold/60 focus:border-gold focus:outline-none"
+                        >
+                          <span className="block text-sm font-semibold text-zinc-100">{preset.label}</span>
+                          <span className="mt-1 block text-xs leading-5 text-muted">{preset.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                    {presetNotice ? (
+                      <div className="mt-4 rounded-md border border-gold/30 bg-gold/10 p-3 text-sm leading-6 text-zinc-100">
+                        <p className="font-semibold text-gold">{presetNotice.preset.label}</p>
+                        <p className="text-muted">
+                          Filled {presetNotice.filled} empty field{presetNotice.filled === 1 ? "" : "s"}.
+                          {presetNotice.skipped ? ` Kept ${presetNotice.skipped} existing answer${presetNotice.skipped === 1 ? "" : "s"} unchanged.` : ""}
+                        </p>
+                        {presetNotice.preset.notice ? (
+                          <div className="mt-3">
+                            <p className="font-semibold text-zinc-100">{presetNotice.preset.notice.title}</p>
+                            <p className="mt-1 text-muted">{presetNotice.preset.notice.body}</p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {presetNotice.preset.notice.links.map((link) => (
+                                <Link key={link.href} to={link.href} className="rounded-md border border-gold/40 px-3 py-2 text-xs font-semibold text-gold hover:bg-gold hover:text-black">
+                                  {link.label}
+                                </Link>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {visibleFields.map((field) => {
+                  const required = serviceFieldRequired(field, formValues);
+                  const options = serviceFieldOptions(field, formValues, isLawyerRequest);
+                  const currentValue = formValues[field.name];
+                  const textValue = typeof currentValue === "string" ? currentValue : "";
+                  return (
+                    <label key={field.name} className="grid gap-2 text-sm font-medium text-zinc-200">
+                      {field.kind === "checkbox" ? (
+                        <span className="flex gap-3 rounded-md border border-white/10 bg-black p-3">
                           <input
                             name={field.name}
-                            required={field.required}
-                            type={field.kind === "url" ? "url" : "text"}
-                            maxLength={field.maxLength}
-                            placeholder={field.placeholder}
-                            className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
+                            type="checkbox"
+                            value="true"
+                            checked={currentValue === true}
+                            onChange={(event) => updateField(field.name, event.currentTarget.checked)}
+                            required={required}
+                            className="mt-1"
                           />
-                        )}
-                      </>
-                    )}
-                  </label>
-                ))}
+                          {field.label}
+                        </span>
+                      ) : (
+                        <>
+                          {field.label}
+                          {field.help ? <span className="text-xs leading-5 text-muted">{field.help}</span> : null}
+                          {field.kind === "textarea" ? (
+                            <textarea
+                              name={field.name}
+                              required={required}
+                              rows={4}
+                              maxLength={field.maxLength}
+                              placeholder={field.placeholder}
+                              value={textValue}
+                              onChange={(event) => updateField(field.name, event.currentTarget.value)}
+                              className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
+                            />
+                          ) : field.kind === "select" ? (
+                            <select
+                              name={field.name}
+                              required={required}
+                              value={textValue}
+                              onChange={(event) => updateField(field.name, event.currentTarget.value)}
+                              className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
+                            >
+                              <option value="">Select</option>
+                              {options.map((option) => <option key={option}>{option}</option>)}
+                            </select>
+                          ) : (
+                            <input
+                              name={field.name}
+                              required={required}
+                              type={field.kind === "url" ? "url" : "text"}
+                              maxLength={field.maxLength}
+                              placeholder={field.placeholder}
+                              value={textValue}
+                              onChange={(event) => updateField(field.name, event.currentTarget.value)}
+                              className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
+                            />
+                          )}
+                        </>
+                      )}
+                    </label>
+                  );
+                })}
                 {error ? <p className="rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</p> : null}
                 <button disabled={submitting} className="mt-2 inline-flex items-center justify-center gap-2 rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-60" type="submit">
                   {submitting ? "Submitting..." : "Submit Private Request"} <ArrowRight className="h-4 w-4" />

@@ -76,6 +76,7 @@ import {
   updateJudicialRecord
 } from "./judicialRecords";
 import { PermissionError, requireAnyPermission, requirePermission } from "./permissions";
+import { maintainLawyerSticky } from "./serviceDiscord";
 import {
   adminProfessionalProfileDetail,
   adminProfessionalProfiles,
@@ -330,6 +331,22 @@ export default {
         env
       );
     }
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil((async () => {
+      try {
+        const result = await maintainLawyerSticky(env);
+        if (result.action === "posted" || result.ok === false) {
+          console.log(JSON.stringify({ event: "lawyer_sticky_scheduled", ...result }));
+        }
+      } catch (cause) {
+        console.error(JSON.stringify({
+          event: "lawyer_sticky_scheduled_failed",
+          cause: cause instanceof Error ? cause.message : String(cause)
+        }));
+      }
+    })());
   }
 };
 

@@ -5,15 +5,20 @@ import type { Env } from "./types";
 
 const VIEW_CHANNEL = 1024n;
 const SEND_MESSAGES = 2048n;
+const MANAGE_MESSAGES = 8192n;
 const EMBED_LINKS = 16384n;
 const READ_HISTORY = 65536n;
 const MANAGE_CHANNELS = 16n;
 const MANAGE_ROLES = 268435456n;
 const DOJ_NEON_PINK = 0xff2fae;
+const LAWYER_STICKY_MAPPING_KEY = "REQUEST_LAWYER";
+const LAWYER_STICKY_COOLDOWN_MS = 8_000;
+const LAWYER_STICKY_MESSAGE = "Please submit lawyer requests through the DOJ portal:\nhttps://miami-stories-doj.pages.dev/services/lawyer\n\nFree-typed requests in this channel may not be answered.";
 const REQUIRED_PERMISSION_BITS = {
   viewChannels: VIEW_CHANNEL,
   manageChannels: MANAGE_CHANNELS,
   managePermissions: MANAGE_ROLES,
+  manageMessages: MANAGE_MESSAGES,
   sendMessages: SEND_MESSAGES,
   embedLinks: EMBED_LINKS,
   readMessageHistory: READ_HISTORY
@@ -29,6 +34,37 @@ interface TicketConfig {
 export interface ServiceRequestMentions {
   userIds: string[];
   roleIds: string[];
+}
+
+interface DiscordStickyState {
+  mappingKey: string;
+  channelId: string;
+  messageId: string | null;
+  lastPostedAt: string | null;
+  lastCheckedAt: string | null;
+  lastTriggerMessageId: string | null;
+}
+
+interface DiscordMessage {
+  id: string;
+  type?: number;
+  content?: string;
+  webhook_id?: string | null;
+  author?: {
+    id: string;
+    username?: string;
+    bot?: boolean;
+  };
+}
+
+export interface LawyerStickyResult {
+  ok: boolean;
+  action: "posted" | "skipped";
+  channelId?: string;
+  messageId?: string;
+  deletedPrevious?: boolean;
+  deleteWarning?: string;
+  reason?: string;
 }
 
 export async function createServiceRequestTicketChannel(env: Env, request: ServiceRequestDetail, config: TicketConfig) {
@@ -184,6 +220,64 @@ export async function postServiceRequestEmbedToPrivateTicket(
   return (await response.json()) as { id: string };
 }
 
+export async function maintainLawyerSticky(env: Env): Promise<LawyerStickyResult> {
+  if (!env.DB) return { ok: false, action: "skipped", reason: "D1 is not configured." };
+  const channelId = await lawyerStickyChannelId(env);
+  if (!channelId) return { ok: false, action: "skipped", reason: "REQUEST_LAWYER channel mapping is not configured." };
+
+  const state = await readLawyerStickyState(env);
+  const messages = await recentChannelMessages(env, channelId);
+  await recordLawyerStickyCheck(env, channelId);
+  const botUserId = await fetchBotUser(env).then((user) => user.id).catch(() => null);
+  const latest = messages[0];
+  if (!latest) return { ok: true, action: "skipped", channelId, reason: "No recent messages found." };
+  if (!normalHumanMessage(latest, botUserId)) {
+    return { ok: true, action: "skipped", channelId, reason: "Latest message is not a normal user message." };
+  }
+  if (cooldownActive(state, Date.now())) {
+    return { ok: true, action: "skipped", channelId, reason: "Sticky cooldown is active." };
+  }
+  return postLawyerSticky(env, { channelId, triggerMessageId: latest.id });
+}
+
+export async function postLawyerSticky(
+  env: Env,
+  input: { channelId?: string; triggerMessageId?: string; force?: boolean } = {}
+): Promise<LawyerStickyResult> {
+  if (!env.DB) return { ok: false, action: "skipped", reason: "D1 is not configured." };
+  const channelId = input.channelId || await lawyerStickyChannelId(env);
+  if (!channelId) return { ok: false, action: "skipped", reason: "REQUEST_LAWYER channel mapping is not configured." };
+  const state = await readLawyerStickyState(env);
+  if (!input.force && cooldownActive(state, Date.now())) {
+    return { ok: true, action: "skipped", channelId, reason: "Sticky cooldown is active." };
+  }
+
+  let deletedPrevious = false;
+  let deleteWarning: string | undefined;
+  if (state?.messageId && state.channelId === channelId) {
+    const deleted = await deleteLawyerStickyMessage(env, channelId, state.messageId);
+    deletedPrevious = deleted.deleted;
+    deleteWarning = deleted.warning;
+  }
+
+  const response = await discordApi(env, `/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: LAWYER_STICKY_MESSAGE,
+      allowed_mentions: allowedMentions({ userIds: [], roleIds: [] })
+    })
+  });
+  if (!response.ok) throw await DiscordApiError.fromResponse(response, {
+    action: "post_lawyer_sticky",
+    endpoint: `/channels/${channelId}/messages`,
+    channelId,
+    likelyFixContext: "lawyer_sticky"
+  });
+  const message = await response.json() as { id: string };
+  await writeLawyerStickyState(env, channelId, message.id, input.triggerMessageId ?? null);
+  return { ok: true, action: "posted", channelId, messageId: message.id, deletedPrevious, deleteWarning };
+}
+
 export async function postServiceRequestEmbedToRequestChannel(
   env: Env,
   request: ServiceRequestDetail,
@@ -320,6 +414,96 @@ export async function postPublicPortalPanelMessage(): Promise<never> {
 
 export async function postAdminLogEmbed(): Promise<never> {
   throw new Error("Admin log embed posting is scaffolded for a later stage.");
+}
+
+async function lawyerStickyChannelId(env: Env): Promise<string | null> {
+  const row = await env.DB!.prepare("SELECT discord_channel_id as id FROM discord_channel_mappings WHERE mapping_key = ? AND discord_channel_id != ''")
+    .bind(LAWYER_STICKY_MAPPING_KEY)
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+async function readLawyerStickyState(env: Env): Promise<DiscordStickyState | null> {
+  return await env.DB!.prepare(
+    `SELECT mapping_key as mappingKey, channel_id as channelId, message_id as messageId,
+      last_posted_at as lastPostedAt, last_checked_at as lastCheckedAt,
+      last_trigger_message_id as lastTriggerMessageId
+     FROM discord_sticky_messages
+     WHERE mapping_key = ?`
+  ).bind(LAWYER_STICKY_MAPPING_KEY).first<DiscordStickyState>();
+}
+
+async function writeLawyerStickyState(env: Env, channelId: string, messageId: string, triggerMessageId: string | null): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB!.prepare(
+    `INSERT INTO discord_sticky_messages (
+      mapping_key, channel_id, message_id, last_posted_at, last_checked_at, last_trigger_message_id, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(mapping_key) DO UPDATE SET
+      channel_id = excluded.channel_id,
+      message_id = excluded.message_id,
+      last_posted_at = excluded.last_posted_at,
+      last_checked_at = excluded.last_checked_at,
+      last_trigger_message_id = excluded.last_trigger_message_id,
+      updated_at = CURRENT_TIMESTAMP`
+  ).bind(LAWYER_STICKY_MAPPING_KEY, channelId, messageId, now, now, triggerMessageId).run();
+}
+
+async function recordLawyerStickyCheck(env: Env, channelId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB!.prepare(
+    `INSERT INTO discord_sticky_messages (mapping_key, channel_id, last_checked_at, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(mapping_key) DO UPDATE SET
+       channel_id = excluded.channel_id,
+       last_checked_at = excluded.last_checked_at,
+       updated_at = CURRENT_TIMESTAMP`
+  ).bind(LAWYER_STICKY_MAPPING_KEY, channelId, now).run();
+}
+
+async function recentChannelMessages(env: Env, channelId: string): Promise<DiscordMessage[]> {
+  const endpoint = `/channels/${channelId}/messages?limit=5`;
+  const response = await discordApi(env, endpoint);
+  if (!response.ok) throw await DiscordApiError.fromResponse(response, {
+    action: "read_lawyer_sticky_channel_messages",
+    endpoint,
+    channelId,
+    likelyFixContext: "lawyer_sticky"
+  });
+  const messages = await response.json();
+  return Array.isArray(messages) ? messages as DiscordMessage[] : [];
+}
+
+async function deleteLawyerStickyMessage(env: Env, channelId: string, messageId: string): Promise<{ deleted: boolean; warning?: string }> {
+  const endpoint = `/channels/${channelId}/messages/${messageId}`;
+  const response = await discordApi(env, endpoint, { method: "DELETE" });
+  if (response.ok || response.status === 404) return { deleted: response.ok };
+  if (response.status === 403) {
+    const warning = "Bot could not delete the previous lawyer sticky message. Manage Messages may be missing.";
+    console.warn(JSON.stringify({ event: "lawyer_sticky_delete_forbidden", channelId, messageId, warning }));
+    return { deleted: false, warning };
+  }
+  throw await DiscordApiError.fromResponse(response, {
+    action: "delete_lawyer_sticky",
+    endpoint,
+    channelId,
+    messageId,
+    likelyFixContext: "lawyer_sticky"
+  });
+}
+
+function cooldownActive(state: DiscordStickyState | null, nowMs: number): boolean {
+  if (!state?.lastPostedAt) return false;
+  const last = new Date(state.lastPostedAt).getTime();
+  return Number.isFinite(last) && nowMs - last < LAWYER_STICKY_COOLDOWN_MS;
+}
+
+function normalHumanMessage(message: DiscordMessage, botUserId: string | null): boolean {
+  if (!message.id || !message.author?.id) return false;
+  if (message.webhook_id) return false;
+  if (message.author.bot) return false;
+  if (botUserId && message.author.id === botUserId) return false;
+  return message.type === undefined || message.type === 0;
 }
 
 function privateServiceRequestEmbed(env: Env, request: ServiceRequestDetail) {
