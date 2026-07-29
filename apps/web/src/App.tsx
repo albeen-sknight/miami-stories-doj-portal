@@ -149,7 +149,7 @@ const DISCORD_RESOURCE_CHANNEL_ID = import.meta.env.VITE_DISCORD_RESOURCE_CHANNE
 const SITE_URL = "https://miami-stories-doj.pages.dev";
 const SITE_NAME = "Miami Stories Department of Justice";
 const DEFAULT_DESCRIPTION =
-  "Florida-inspired legal services, court administration, Bar licensing, and public justice resources for Miami Stories RP.";
+  "Official DOJ services, court administration, Bar licensing, and public legal resources for Miami Stories.";
 const SOCIAL_IMAGE_URL = `${SITE_URL}/miami-og-image.png`;
 
 type SeoRoute = {
@@ -379,11 +379,11 @@ function Home() {
         <div className="relative mx-auto flex min-h-[620px] max-w-7xl flex-col justify-center px-4 py-16 sm:min-h-[680px] sm:px-6 sm:py-20 lg:px-8">
           <div className="max-w-4xl min-w-0">
             <img src="/logo-160.webp" alt="" className="mb-6 h-20 w-20 rounded-full object-cover ring-2 ring-gold/50 sm:mb-8 sm:h-24 sm:w-24" />
-            <p className="break-words text-xs font-semibold uppercase tracking-[0.18em] text-gold sm:text-sm sm:tracking-[0.24em]">Miami, Florida - Florida-inspired RP law</p>
+            <p className="break-words text-xs font-semibold uppercase tracking-[0.18em] text-gold sm:text-sm sm:tracking-[0.24em]">Miami, Florida - Department of Justice</p>
             <h1 className="mt-4 break-words text-4xl font-semibold min-[390px]:text-5xl sm:text-6xl lg:text-7xl">Miami Stories Department of Justice</h1>
-            <p className="mt-6 text-xl text-zinc-200 sm:text-2xl">A Florida-based justice portal for Miami Stories roleplay.</p>
+            <p className="mt-6 text-xl text-zinc-200 sm:text-2xl">Official justice portal for the City of Miami.</p>
             <p className="mt-5 max-w-3xl text-base leading-7 text-zinc-200 sm:text-lg sm:leading-8">
-              Official legal services, court docket, Bar licensing, transcript archives, and justice administration for Miami Stories RP.
+              Official legal services, court docket, Bar licensing, transcript archives, and justice administration for Miami Stories.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <ButtonLink href="/services">Request a Service</ButtonLink>
@@ -397,9 +397,8 @@ function Home() {
             <div className="mt-8 max-w-4xl rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 p-4 text-sm leading-6 text-fuchsia-100 shadow-[0_0_24px_rgba(236,72,153,0.18)]">
               <strong className="text-fuchsia-300">Website under construction:</strong>{" "}
               The Miami Stories DOJ portal is currently being built and reviewed. Public resources,
-              service forms, templates, docket tools, and legal references may be incomplete or subject to change.
-              This site reflects Miami Stories RP procedures and Florida-inspired RP law only. It is not
-              real-world legal advice.
+              service forms, templates, docket tools, and legal references may be incomplete or subject to change
+              as the Department finalizes official procedures.
             </div>
           </div>
         </div>
@@ -414,9 +413,9 @@ function Home() {
               <h2 className="mt-3 text-3xl font-semibold">Accessible justice with clean records and accountable process.</h2>
             </div>
             <p className="text-lg leading-8 text-zinc-300">
-              The mission of the Department of Justice is to support a Florida-inspired RP legal framework adapted for
+              The mission of the Department of Justice is to support a clear and accessible legal framework for
               Miami Stories. The portal keeps court procedure, legal services, Bar licensing, public records, and staff
-              administration organized without becoming overly real-life legalistic.
+              administration organized, practical, and transparent.
             </p>
           </div>
         </div>
@@ -428,7 +427,7 @@ function Home() {
           <p className="mt-4 max-w-4xl text-lg leading-8 text-zinc-300">
             The Department coordinates court administration, prosecutor review, defense counsel access, attorney
             licensing, public legal resources, civil and administrative services, docket publication, Bar Examination
-            management, and communication between legal actors and the public throughout Miami Stories.
+            management, and communication between legal actors and the public throughout the City of Miami.
           </p>
           <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {[
@@ -557,7 +556,7 @@ function Home() {
 function LegalNoticePage() {
   return (
     <PolicyPage eyebrow="Legal Notice" title="Legal Notice">
-      <p>The Miami Stories Department of Justice Portal is maintained for Miami Stories Department of Justice administrative and community proceedings.</p>
+      <p>The Miami Stories Department of Justice Portal is maintained for Miami Stories Department of Justice proceedings, public records, legal services, and administrative use.</p>
       <p>(c) 2026 Miami Stories Department of Justice Portal. All rights reserved.</p>
       <p>
         Unauthorized copying, redistribution, resale, sublicensing, republication, scraping, cloning, modification,
@@ -569,7 +568,7 @@ function LegalNoticePage() {
         The real project owner identifier for source-code and repository ownership is albeen-sknight:
         {" "}<ExternalAnchor href="https://github.com/albeen-sknight">https://github.com/albeen-sknight</ExternalAnchor>
       </p>
-      <p>This portal is provided for Miami Stories community proceedings and administrative use. It does not provide real-world legal advice.</p>
+      <p>This portal is maintained for Miami Stories Department of Justice proceedings, public records, legal services, and administrative use.</p>
     </PolicyPage>
   );
 }
@@ -591,8 +590,8 @@ function PrivacyPolicyPage() {
         intentionally published through the portal workflow.
       </p>
       <p>
-        Users should not submit unnecessary sensitive real-world personal information. The portal is intended for Miami
-        Stories community proceedings and administrative use, not real-world legal intake.
+        Users should not submit unnecessary personal information outside what is needed for DOJ request handling,
+        court administration, records administration, and portal access.
       </p>
       <p>
         The project owner identifier for repository and source-code ownership is albeen-sknight, while public DOJ
@@ -674,7 +673,7 @@ function Resources() {
 
   return (
     <>
-      <PageHeader eyebrow="Resources" title="Published legal resources" description="Review Miami Stories DOJ procedures, Florida-inspired RP legal standards, courtroom expectations, Bar requirements, and public filing guidance." />
+      <PageHeader eyebrow="Resources" title="Published legal resources" description="Review Miami Stories DOJ procedures, city legal standards, courtroom expectations, Bar requirements, and public filing guidance." />
       <Content>{loading ? <LoadingState /> : error ? <ErrorState message={error.message} /> : (
         <div className="space-y-8">
           {data?.source === "seed" ? <Badge>Seed fallback</Badge> : <Badge>D1 records</Badge>}
@@ -730,7 +729,7 @@ function Faq() {
 
   return (
     <>
-      <PageHeader eyebrow="FAQ" title="Public DOJ FAQ" description="This portal is adapted for Miami Stories RP and supports fair, organized, accessible legal roleplay." />
+      <PageHeader eyebrow="FAQ" title="Public DOJ FAQ" description="This portal supports fair, organized, and accessible Department procedure for Miami Stories." />
       <Content>{loading ? <LoadingState /> : error ? <ErrorState message={error.message} /> : (
         <div className="space-y-8">
           <Card>
@@ -2903,7 +2902,7 @@ function judicialOrderTemplate(form: JudicialFormState, judgeName: string): stri
     "- This order may be revisited by the Court if new facts or procedural defects are presented.",
     "",
     "## Notice",
-    "This judicial record is issued for Miami Stories community proceedings and does not provide real-world legal advice."
+    "This judicial record is issued for Miami Stories Department of Justice proceedings, public records, and administrative use."
   ].join("\n");
 }
 
@@ -4547,7 +4546,7 @@ function BarExam({ me, loading }: { me: CurrentUserResponse | null; loading: boo
   if (loading) return <Content><LoadingState /></Content>;
   return (
     <>
-      <PageHeader eyebrow="Bar Exam" title="Miami Stories Bar Examination" description="Applicants demonstrate understanding of the Miami Stories legal code, court procedure, ethical conduct, and RP courtroom standards." />
+      <PageHeader eyebrow="Bar Exam" title="Miami Stories Bar Examination" description="Applicants demonstrate understanding of the Miami Stories legal code, court procedure, ethical conduct, and courtroom standards." />
       <Content>
         {!me?.authenticated ? (
           <Card>
@@ -4633,7 +4632,7 @@ function BarExamInstructionsCard() {
         <p>The Bar Examination is administered through the DOJ Portal. Your exam version is assigned by the portal and locked to your logged-in Discord account.</p>
         <p>You have 24 hours from the moment you start the exam to complete and submit it. You do not need to rush. Use the time to read carefully, research the official materials, organize your thoughts, and write complete answers.</p>
         <p>This exam is open book. You may use official Miami Stories legal resources, including the Miami Stories legal code, courtroom procedures, DOJ standards, and attorney training materials.</p>
-        <p>You may use outside legal research for structure or persuasive guidance, but the Florida-inspired Miami Stories RP legal framework controls where applicable.</p>
+        <p>You may use outside legal research for structure or persuasive guidance, but the Miami Stories legal framework controls where applicable.</p>
         <p>You must answer in your own words. You may not use AI to write, rewrite, generate, or complete your answers for you.</p>
         <p>You may not copy another candidate's answers, share your assigned version, share your answers, or ask another person to complete any part of the exam for you.</p>
         <p>Where relevant, cite the specific authority you rely on, such as DOI sections, SOP sections, Charter provisions, or Penal Code sections.</p>

@@ -6,7 +6,7 @@ export const faqSeed: FaqEntry[] = [
     category: "General DOJ Information",
     question: "What is the Miami Stories Department of Justice?",
     answerMarkdown:
-      "The Miami Stories DOJ is a fictional roleplay legal institution that supports courts, attorneys, public legal resources, and documented justice workflows inside the server.\n\nIt uses a Florida-inspired RP legal framework adapted for Miami Stories. It is not a real government body, legal service, court system, or source of real-world legal advice.",
+      "The Miami Stories DOJ supports courts, attorneys, public legal resources, official DOJ services, and documented justice workflows for the City of Miami.\n\nIt operates under the Miami legal framework, Department procedure, Bar licensing rules, and published court administration standards.",
     sortOrder: 1
   },
   {
@@ -14,7 +14,7 @@ export const faqSeed: FaqEntry[] = [
     category: "General DOJ Information",
     question: "Where can I find official DOJ resources?",
     answerMarkdown:
-      "Published legal resources, templates, and guidance are available in the portal at [/resources](/resources).\n\nUse those materials for roleplay procedure only.",
+      "Published legal resources, templates, and guidance are available in the portal at [/resources](/resources).\n\nUse those materials for Miami Stories Department procedure, court administration, and public legal resources.",
     sortOrder: 2
   },
   {
@@ -154,7 +154,7 @@ export const attorneyProfilesSeed: AttorneyProfile[] = [
     barNumber: null,
     practiceAreas: [],
     biographyMarkdown:
-      "Alvaro Serrano Castro is a legal officer committed to constitutional rights, fair procedure, and disciplined judicial administration. He currently serves as Chief Justice of the Miami Stories Department of Justice, where his work focuses on building a legal system that is functional, accountable, and sustainable beyond any single officeholder.\n\nHis background includes prior historical RP service as Chief Justice in Aspen City, Circuit Court Judge in Chicago / Section 8, Assistant Attorney General, defense counsel in Power, and approximately four years in law enforcement. That experience gives him a practical understanding of courtroom procedure, police operations, evidence review, prosecution standards, defense advocacy, and departmental decision-making.\n\nHis legal philosophy is based on due process, checks and balances, proportionality, and the separation of judicial, prosecutorial, defense, and regulatory functions. He believes law enforcement must have the authority needed to protect the public, but that authority must remain subject to constitutional safeguards, judicial review, reliable evidence, and professional accountability.",
+      "Alvaro Serrano Castro is a legal officer committed to constitutional rights, fair procedure, and disciplined judicial administration. He currently serves as Chief Justice of the Miami Stories Department of Justice, where his work focuses on building a legal system that is functional, accountable, and sustainable beyond any single officeholder.\n\nHis background includes prior service as Chief Justice in Aspen City, Circuit Court Judge in Chicago / Section 8, Assistant Attorney General, defense counsel in Power, and approximately four years in law enforcement. That experience gives him a practical understanding of courtroom procedure, police operations, evidence review, prosecution standards, defense advocacy, and departmental decision-making.\n\nHis legal philosophy is based on due process, checks and balances, proportionality, and the separation of judicial, prosecutorial, defense, and regulatory functions. He believes law enforcement must have the authority needed to protect the public, but that authority must remain subject to constitutional safeguards, judicial review, reliable evidence, and professional accountability.",
     motto: "Rights Before Assumptions.\nEvidence Before Conviction.\nJustice Without Compromise.",
     quote: "The burden belongs to the state. Your rights belong to you.",
     responsibilities: alvaroResponsibilities,

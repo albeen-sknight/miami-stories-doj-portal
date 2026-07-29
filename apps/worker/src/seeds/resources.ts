@@ -7,7 +7,7 @@ export const resourceDocumentsSeed: ResourceDocument[] = [
     category: "LEGAL_AUTHORITY",
     version: "v1.0",
     url: "https://docs.google.com/document/d/1iwj52akac2ctqS7vF3L01aaSQTVsz4qQhRuU4B-avu8/edit?usp=sharing",
-    description: "Foundational rights document for Miami Stories legal authority and protected RP rights.",
+    description: "Foundational rights document for Miami Stories legal authority and protected rights.",
     isPublic: true
   },
   {
@@ -25,7 +25,7 @@ export const resourceDocumentsSeed: ResourceDocument[] = [
     category: "LEGAL_AUTHORITY",
     version: "v1.0",
     url: "https://docs.google.com/spreadsheets/d/1MIzJyh0acUGM53-vwQ9tnx5qYWfwlnaPvlmEIbJShic/edit?usp=sharing",
-    description: "Miami Stories legal code reference for criminal charges and RP-friendly classifications.",
+    description: "Miami Stories legal code reference for criminal charges and city procedure classifications.",
     isPublic: true
   },
   {
@@ -61,7 +61,7 @@ export const resourceDocumentsSeed: ResourceDocument[] = [
     category: "ORGANIZATION_REGULATION",
     version: "v1.1",
     url: "https://docs.google.com/document/d/1xY7EHJtZH7XAwIcRE8nGFejzdbKbAg66OVVzNh0HIT8/edit?usp=sharing",
-    description: "Florida-inspired RP guidance for weapons review, licensing concepts, and administrative requirements.",
+    description: "Miami legal framework guidance for weapons review, licensing concepts, and administrative requirements.",
     isPublic: true
   },
   {

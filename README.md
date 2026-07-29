@@ -1,6 +1,6 @@
 # Miami Stories DOJ Portal
 
-Cloudflare full-stack foundation for the fictional Miami Stories Department of Justice, a GTA roleplay legal portal. This is not a real government website, court system, law firm, legal service, or source of real-world legal advice.
+Cloudflare full-stack foundation for the Miami Stories Department of Justice portal, including public legal resources, service intake, docket information, Bar licensing, and records administration.
 
 ## Stage 1 Foundation
 

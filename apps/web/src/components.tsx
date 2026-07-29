@@ -259,7 +259,7 @@ function LegalFooter() {
             structure, forms, templates, administrative systems, or branding is prohibited without prior permission from
             the project owner.
           </p>
-          <p>This portal is for Miami Stories community proceedings and administrative use. It does not provide real-world legal advice.</p>
+          <p>This portal is maintained for Miami Stories Department of Justice proceedings, public records, legal services, and administrative use.</p>
           <nav className="flex flex-wrap gap-x-4 gap-y-2" aria-label="Legal and policy links">
             {links.map(([label, href]) => (
               <Link key={href} to={href} className="font-semibold text-gold hover:text-white">

@@ -13,4 +13,4 @@ No permission is granted to copy, redistribute, resell, sublicense, publish, hos
 
 Access to this repository, deployment, or website does not grant any license, ownership interest, or right of use beyond the limited authorization expressly provided by the owner.
 
-This project is maintained for Miami Stories Department of Justice administrative and community proceedings.
+This project is maintained for Miami Stories Department of Justice proceedings, public records, legal services, and administrative use.

@@ -1,8 +1,8 @@
 # Miami Stories DOJ - Frequently Asked Questions
 
-Welcome to the official Miami Stories Department of Justice FAQ for Miami, Florida roleplay.
+Welcome to the official Miami Stories Department of Justice FAQ for Miami, Florida.
 
-This FAQ explains how the Miami Stories DOJ portal supports service requests, court coordination, public docket notices, Bar licensing, warrants, subpoenas, transcripts, and staff workflows. The portal is adapted for Miami Stories RP and is not real-world legal advice.
+This FAQ explains how the Miami Stories DOJ portal supports service requests, court coordination, public docket notices, Bar licensing, warrants, subpoenas, transcripts, and staff workflows under Department procedure.
 
 DOJ Structure and Leadership
 
@@ -12,7 +12,7 @@ The DOJ is organized around judicial leadership, prosecution, defense counsel, B
 
 What legal framework does Miami Stories use?
 
-Miami Stories uses a Florida-inspired RP legal framework adapted for server mechanics and semi-serious roleplay. Real Florida concepts may inspire the structure, but the portal should use simplified Miami Stories legal code and procedures rather than real statutes copied word-for-word.
+Miami Stories uses a city legal framework adapted for Department procedure, court administration, and public legal resources. The portal should use Miami Stories legal code and procedures rather than real statutes copied word-for-word.
 
 What are the main DOJ branches?
 
@@ -33,7 +33,7 @@ Review the official resources, take the Miami Stories Bar Examination through th
 
 What does the Bar Examination test?
 
-The Bar Examination tests the Miami Stories legal code, court procedure, ethical conduct, professional communication, evidence handling, rights advisement, and RP courtroom standards. The exam is locked to the logged-in Discord account and uses the portal's native timer and version assignment.
+The Bar Examination tests the Miami Stories legal code, court procedure, ethical conduct, professional communication, evidence handling, rights advisement, and courtroom standards. The exam is locked to the logged-in Discord account and uses the portal's native timer and version assignment.
 
 Arrests Rights and Pleas
 
@@ -73,7 +73,7 @@ Arrest and Search Warrants
 
 Who reviews warrant requests?
 
-Authorized judicial and prosecutorial personnel review warrant requests under Miami Stories DOJ procedure, probable cause standards, RP rights protections, and server mechanics.
+Authorized judicial and prosecutorial personnel review warrant requests under Miami Stories DOJ procedure, probable cause standards, rights protections, and city legal standards.
 
 What should a warrant request include?
 
@@ -81,7 +81,7 @@ Include the target, case number, requesting officer or agency, exact charges or 
 
 How does search and seizure review work?
 
-Search and seizure review focuses on the target, scope, probable cause, evidence requested, timing, and whether the request is specific enough for a judge to approve or deny in a clean RP-friendly way.
+Search and seizure review focuses on the target, scope, probable cause, evidence requested, timing, and whether the request is specific enough for a judge to approve or deny under clear Department procedure.
 
 Evidence Bodycams and CCTV
 
@@ -101,7 +101,7 @@ The portal supports defense counsel requests, court hearing requests, civil clai
 
 Are expungements guaranteed?
 
-No. Expungement is discretionary in RP and depends on the Miami Stories legal code, staff review, court order requirements, server policy, and the evidence submitted.
+No. Expungement is discretionary and depends on the Miami Stories legal code, staff review, court order requirements, Department policy, and the evidence submitted.
 
 Can marriage and divorce records be handled by the DOJ?
 
