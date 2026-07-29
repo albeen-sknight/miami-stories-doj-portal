@@ -394,12 +394,6 @@ function Home() {
                 Join the Discord <ArrowRight className="h-4 w-4" />
               </a>
             </div>
-            <div className="mt-8 max-w-4xl rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 p-4 text-sm leading-6 text-fuchsia-100 shadow-[0_0_24px_rgba(236,72,153,0.18)]">
-              <strong className="text-fuchsia-300">Website under construction:</strong>{" "}
-              The Miami Stories DOJ portal is currently being built and reviewed. Public resources,
-              service forms, templates, docket tools, and legal references may be incomplete or subject to change
-              as the Department finalizes official procedures.
-            </div>
           </div>
         </div>
 
