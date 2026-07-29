@@ -155,7 +155,7 @@ export const serviceFormDefinitions: Record<string, ServiceFormDefinition> = {
         required: true,
         maxLength: 240,
         placeholder: "Example: Need an attorney to help me petition for a restraining or protective order.",
-        help: "Short and general only. This may appear in the public lawyer request post."
+        help: "Public summary is visible in the lawyer request channel. Keep it short and general. Put sensitive details in the private details field."
       },
       {
         name: "briefDescription",

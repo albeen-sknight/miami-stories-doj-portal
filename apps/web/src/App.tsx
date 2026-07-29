@@ -1736,6 +1736,14 @@ const LAWYER_PRESET_OVERWRITE_FIELDS = new Set([
   "preferredRepresentation"
 ]);
 
+const LAWYER_ACKNOWLEDGEMENT_TTL_MS = 24 * 60 * 60 * 1000;
+const LAWYER_INTRO_ACK_KEY = "miamiDoj.lawyer.beforeSubmitAcknowledgedAt";
+const LAWYER_ROUTE_ACK_KEYS: Record<LawyerRouteModalKey, string> = {
+  civil: "miamiDoj.lawyer.routeAck.civil",
+  expungement: "miamiDoj.lawyer.routeAck.expungement",
+  process: "miamiDoj.lawyer.routeAck.process"
+};
+
 const LAWYER_INTRO_MODAL: LawyerGuidanceModalConfig = {
   title: "Before You Submit",
   body: "Request-a-Lawyer is for legal advice or representation.\n\nThe public summary should be short and general. Do not include detailed allegations, full incident narratives, phone numbers, addresses, confidential evidence, or unnecessary third-party names in the public summary.\n\nUse the private details field for information DOJ staff may need to route the request.",
@@ -1809,6 +1817,27 @@ function emptyFormValue(value: ServiceFormValue | undefined): boolean {
   return value === undefined || value === false || (typeof value === "string" && value.trim() === "");
 }
 
+function lawyerAcknowledgementFresh(key: string): boolean {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return false;
+    const acknowledgedAt = Number(raw);
+    if (!Number.isFinite(acknowledgedAt)) return false;
+    const age = Date.now() - acknowledgedAt;
+    return age >= 0 && age < LAWYER_ACKNOWLEDGEMENT_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+function storeLawyerAcknowledgement(key: string) {
+  try {
+    window.localStorage.setItem(key, String(Date.now()));
+  } catch {
+    // Acknowledgement storage is a convenience; private browsing or storage blocks should not break the form.
+  }
+}
+
 function payloadFromVisibleFields(fields: ServiceField[], values: ServiceFormValues): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   for (const field of fields) {
@@ -1858,13 +1887,13 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
   const [formValues, setFormValues] = useState<ServiceFormValues>({});
   const [presetNotice, setPresetNotice] = useState<LawyerPresetNotice | null>(null);
   const [lawyerRouteModalKey, setLawyerRouteModalKey] = useState<LawyerRouteModalKey | null>(null);
-  const [lawyerIntroAcknowledged, setLawyerIntroAcknowledged] = useState(false);
+  const [lawyerIntroAcknowledged, setLawyerIntroAcknowledged] = useState(() => lawyerAcknowledgementFresh(LAWYER_INTRO_ACK_KEY));
   const submitInFlight = useRef(false);
   useEffect(() => {
     setFormValues({});
     setPresetNotice(null);
     setLawyerRouteModalKey(null);
-    setLawyerIntroAcknowledged(false);
+    setLawyerIntroAcknowledged(lawyerAcknowledgementFresh(LAWYER_INTRO_ACK_KEY));
     setError(null);
     setSubmitted(null);
     submitInFlight.current = false;
@@ -1878,6 +1907,23 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
   const selectedLawyerPresetId = presetNotice?.preset.id ?? null;
   const showLawyerIntroModal = isLawyerRequest && !authLoading && !submitted && !lawyerIntroAcknowledged;
 
+  function maybeOpenLawyerRouteModal(values: ServiceFormValues) {
+    const routeModalKey = lawyerRouteModalKeyForValues(values);
+    if (routeModalKey && !lawyerAcknowledgementFresh(LAWYER_ROUTE_ACK_KEYS[routeModalKey])) {
+      setLawyerRouteModalKey(routeModalKey);
+    }
+  }
+
+  function acknowledgeLawyerIntroModal() {
+    storeLawyerAcknowledgement(LAWYER_INTRO_ACK_KEY);
+    setLawyerIntroAcknowledged(true);
+  }
+
+  function acknowledgeLawyerRouteModal(routeModalKey: LawyerRouteModalKey) {
+    storeLawyerAcknowledgement(LAWYER_ROUTE_ACK_KEYS[routeModalKey]);
+    setLawyerRouteModalKey(null);
+  }
+
   function updateField(name: string, value: ServiceFormValue) {
     const next = { ...formValues, [name]: value };
     if (isLawyerRequest && name === "representationType") {
@@ -1887,8 +1933,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
     if (isLawyerRequest && LAWYER_PRESET_OVERWRITE_FIELDS.has(name)) setPresetNotice(null);
     setFormValues(next);
     if (isLawyerRequest && (name === "representationType" || name === "representationSubtype")) {
-      const routeModalKey = lawyerRouteModalKeyForValues(next);
-      if (routeModalKey) setLawyerRouteModalKey(routeModalKey);
+      maybeOpenLawyerRouteModal(next);
     }
   }
 
@@ -1904,8 +1949,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
       preset,
       message: `Applied preset: ${preset.label}. Updated routing fields and preserved your typed case details.`
     });
-    const routeModalKey = lawyerRouteModalKeyForValues(next);
-    if (routeModalKey) setLawyerRouteModalKey(routeModalKey);
+    maybeOpenLawyerRouteModal(next);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -2124,7 +2168,8 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
             primaryLabel: "I understand, continue here"
           }}
           id="lawyer-route-guidance-dialog"
-          onClose={() => setLawyerRouteModalKey(null)}
+          onAcknowledge={() => acknowledgeLawyerRouteModal(lawyerRouteModalKey)}
+          onDismiss={() => setLawyerRouteModalKey(null)}
           closeOnEscape
         />
       ) : null}
@@ -2132,7 +2177,8 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
         <LawyerGuidanceModal
           config={LAWYER_INTRO_MODAL}
           id="lawyer-intro-guidance-dialog"
-          onClose={() => setLawyerIntroAcknowledged(true)}
+          onAcknowledge={acknowledgeLawyerIntroModal}
+          onDismiss={acknowledgeLawyerIntroModal}
           closeOnEscape={false}
         />
       ) : null}
@@ -2143,15 +2189,17 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
 function LawyerGuidanceModal({
   config,
   id,
-  onClose,
+  onAcknowledge,
+  onDismiss,
   closeOnEscape
 }: {
   config: LawyerGuidanceModalConfig;
   id: string;
-  onClose: () => void;
+  onAcknowledge: () => void;
+  onDismiss: () => void;
   closeOnEscape: boolean;
 }) {
-  const dialogRef = useDialogFocus<HTMLDivElement>(true, onClose, closeOnEscape);
+  const dialogRef = useDialogFocus<HTMLDivElement>(true, onDismiss, closeOnEscape);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-3 py-4 backdrop-blur-sm sm:px-4 sm:py-6">
       <div
@@ -2169,7 +2217,7 @@ function LawyerGuidanceModal({
           </div>
         </div>
         <div className="mt-5 grid gap-2 sm:grid-cols-2">
-          <button type="button" onClick={onClose} data-autofocus className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-panel">
+          <button type="button" onClick={onAcknowledge} data-autofocus className="rounded-md bg-gold px-4 py-3 text-sm font-semibold text-black focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-panel">
             {config.primaryLabel}
           </button>
           {config.links?.map((link) => (
