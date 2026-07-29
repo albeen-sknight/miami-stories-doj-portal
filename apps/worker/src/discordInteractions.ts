@@ -21,7 +21,7 @@ import { BAR_EXAM_ATTEMPT_STATUSES, DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, 
 import { audit } from "./audit";
 import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, getServiceRequestDetailByTicketChannel, addServiceRequestEvent, closeServiceRequestTicketForContext, latestServiceRequestTicketClaim } from "./serviceRequests";
 import { postLawyerSticky } from "./serviceDiscord";
-import { discordApi, requireEnv } from "./discord";
+import { discordApi, fetchBotUser, fetchGuildMember, requireEnv } from "./discord";
 import { CASE_TYPE_PREFIX } from "./docketDefinitions";
 import { errorJson } from "./http";
 import { deriveActionPermissions, hasActionPermission, PermissionError, requireAnyPermission, requirePermission } from "./permissions";
@@ -37,7 +37,33 @@ const SEND_MESSAGES = 2048n;
 const EMBED_LINKS = 16384n;
 const ATTACH_FILES = 32768n;
 const READ_HISTORY = 65536n;
+const MANAGE_CHANNELS = 16n;
+const MANAGE_ROLES = 268435456n;
+const GUILD_TEXT_CHANNEL = 0;
+const ANNOUNCEMENT_THREAD = 10;
+const PUBLIC_THREAD = 11;
+const PRIVATE_THREAD = 12;
 const TICKET_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_REQUESTS", "ADMIN"];
+const LAWYER_RESPONSE_EVENT_TYPES = ["LAWYER_RESPONSE_CLAIMED", "LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF"] as const;
+const LAWYER_RESPONSE_PERMISSIONS: LogicalPermission[] = [
+  "BAR_ACTIVE",
+  "PUBLIC_DEFENDER_CERTIFIED",
+  "DEFENSE_ATTORNEY",
+  "BAR_ASSOCIATION_MEMBER",
+  "ADMIN"
+];
+const LAWYER_RESPONSE_PARTICIPANT_PERMISSIONS: LogicalPermission[] = [
+  "BAR_ACTIVE",
+  "PUBLIC_DEFENDER_CERTIFIED",
+  "DEFENSE_ATTORNEY",
+  "BAR_ASSOCIATION_MEMBER",
+  "PROSECUTOR",
+  "JUDGE",
+  "JUSTICE",
+  "CHIEF_JUSTICE",
+  "ADMIN"
+];
+const LAWYER_RESPONSE_CATEGORY_KEYS = ["REQUEST_LAWYER_CATEGORY", "LAWYER_REQUESTS_CATEGORY"] as const;
 
 type InteractionType = 1 | 2 | 3;
 type OptionValue = string | number | boolean;
@@ -55,9 +81,13 @@ interface DiscordInteraction {
   };
   user?: DiscordInteractionUser;
   data?: {
-    name: string;
+    name?: string;
     custom_id?: string;
     options?: Array<{ name: string; type: number; value?: OptionValue; options?: Array<{ name: string; type: number; value?: OptionValue }> }>;
+  };
+  message?: {
+    id: string;
+    channel_id?: string;
   };
 }
 
@@ -74,6 +104,7 @@ interface DiscordInteractionResponse {
     content?: string;
     flags?: number;
     components?: DiscordComponent[];
+    allowed_mentions?: { parse?: string[]; users?: string[]; roles?: string[] };
   };
 }
 
@@ -162,6 +193,9 @@ async function processCommand(env: Env, interaction: DiscordInteraction): Promis
 
 function handleComponentInteraction(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
   const customId = interaction.data?.custom_id ?? "";
+  if (customId.startsWith("lawyer_response:")) {
+    return handleLawyerResponseComponent(env, interaction, executionCtx);
+  }
   if (customId.startsWith("ticket_action:")) {
     return handleTicketActionComponent(env, interaction, executionCtx);
   }
@@ -202,6 +236,36 @@ function handleTicketActionComponent(env: Env, interaction: DiscordInteraction, 
   }
   void work;
   return interactionJson(response);
+}
+
+function handleLawyerResponseComponent(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
+  const parsed = parseLawyerResponseCustomId(interaction.data?.custom_id ?? "");
+  if (!parsed) return loggedInteractionResponse(interaction, messageResponse("Unsupported lawyer request action.", true), null);
+  const response = deferredResponse(true);
+  logInteraction(interaction, response, null);
+  const work = processLawyerResponseComponent(env, interaction, parsed.requestId);
+  if (executionCtx) {
+    executionCtx.waitUntil(work);
+    return interactionJson(response);
+  }
+  void work;
+  return interactionJson(response);
+}
+
+async function processLawyerResponseComponent(env: Env, interaction: DiscordInteraction, requestId: string) {
+  try {
+    const ctx = await authContextFromInteraction(env, interaction);
+    const result = await ensureLawyerResponseSpace(env, ctx, requestId, ctx.user.discordId, {
+      eventType: "LAWYER_RESPONSE_CLAIMED",
+      source: "lawyer-response-button",
+      duplicateMode: "block-other-attorney",
+      originalChannelId: interaction.message?.channel_id ?? interaction.channel_id ?? null,
+      originalMessageId: interaction.message?.id ?? null
+    });
+    await editOriginalInteractionResponse(env, interaction, result.ok ? messageResponse(result.message, true) : result.response);
+  } catch (cause) {
+    await editOriginalInteractionResponse(env, interaction, messageResponse(`Lawyer response claim failed: ${safeError(cause)}`, true));
+  }
 }
 
 async function processTicketActionComponent(env: Env, interaction: DiscordInteraction, action: "claim" | "transcript", requestId: string) {
@@ -276,6 +340,7 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
           "`/create-docket`, `/lookup-request`, `/lookup-docket`, `/lookup-bar-attempt`",
           "`/close`, `/close-ticket`, `/transcript-ticket`, `/delete-ticket`",
           "`/add-user`, `/add-role`, `/rename-ticket`, `/claim-ticket`, `/unclaim-ticket`",
+          "`/claim-lawyer-request`, `/lawyer-thread`",
           "`/delete-record`, `/restore-record`",
           "`/post-faq`, `/post-faq-category`, `/post-resources`, `/post-lawyer-sticky`"
         ].join("\n"),
@@ -311,6 +376,10 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
       return claimTicket(env, ctx, interaction, options);
     case "unclaim-ticket":
       return unclaimTicket(env, ctx, interaction, options);
+    case "claim-lawyer-request":
+      return claimLawyerRequestCommand(env, ctx, interaction, options);
+    case "lawyer-thread":
+      return lawyerThreadCommand(env, ctx, interaction, options);
     case "delete-record":
       return deleteRecord(env, ctx, options);
     case "restore-record":
@@ -543,8 +612,13 @@ async function deleteTicket(env: Env, ctx: AuthContext, interaction: DiscordInte
 }
 
 async function addUserToTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
-  requireTicketManagement(ctx);
+  const lawyerSpace = await linkedLawyerResponseSpace(env, interaction.channel_id);
+  if (lawyerSpace) return addUserToLawyerResponseSpaceCommand(env, ctx, lawyerSpace, options);
   const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId && await isCurrentChannelThread(env, interaction.channel_id)) {
+    return messageResponse("This command must be used in a ticket channel, not inside a thread.", true);
+  }
+  requireTicketManagement(ctx);
   if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
   const userId = snowflakeOption(options, "user");
   if (!userId) return messageResponse("Missing required option: user.", true);
@@ -564,8 +638,13 @@ async function addUserToTicket(env: Env, ctx: AuthContext, interaction: DiscordI
 }
 
 async function addRoleToTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
-  requireTicketManagement(ctx);
+  const lawyerSpace = await linkedLawyerResponseSpace(env, interaction.channel_id);
+  if (lawyerSpace) return addRoleToLawyerResponseSpaceCommand(env, ctx, lawyerSpace, options);
   const detail = await linkedServiceTicketDetail(env, interaction.channel_id);
+  if (!detail?.discordTicketChannelId && await isCurrentChannelThread(env, interaction.channel_id)) {
+    return messageResponse("This command must be used in a ticket channel, not inside a thread.", true);
+  }
+  requireTicketManagement(ctx);
   if (!detail?.discordTicketChannelId) return linkedTicketOnlyResponse();
   const roleId = snowflakeOption(options, "role");
   if (!roleId) return messageResponse("Missing required option: role.", true);
@@ -714,6 +793,639 @@ async function postLawyerStickyCommand(env: Env, ctx: AuthContext) {
     result.deletedPrevious ? "Previous sticky deleted." : "No previous sticky was deleted.",
     result.deleteWarning ?? null
   ].filter(Boolean).join("\n"), true);
+}
+
+async function claimLawyerRequestCommand(env: Env, ctx: AuthContext, _interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  const requestNumber = stringOption(options, "request_number");
+  if (!requestNumber) return messageResponse("Missing required option: request_number.", true);
+  const result = await ensureLawyerResponseSpace(env, ctx, requestNumber, ctx.user.discordId, {
+    eventType: "LAWYER_RESPONSE_CLAIMED",
+    source: "claim-lawyer-request",
+    duplicateMode: "block-other-attorney"
+  });
+  return result.ok ? messageResponse(result.message, true) : result.response;
+}
+
+async function lawyerThreadCommand(env: Env, ctx: AuthContext, _interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const requestNumber = stringOption(options, "request_number");
+  const attorneyDiscordId = snowflakeOption(options, "attorney");
+  if (!requestNumber) return messageResponse("Missing required option: request_number.", true);
+  if (!attorneyDiscordId) return messageResponse("Missing required option: attorney.", true);
+  const reason = stringOption(options, "reason");
+  const result = await ensureLawyerResponseSpace(env, ctx, requestNumber, attorneyDiscordId, {
+    eventType: "LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF",
+    source: "lawyer-thread",
+    duplicateMode: "return-existing",
+    reason
+  });
+  if (!result.ok) return result.response;
+
+  const lines = [result.message];
+  const participantPurpose = stringOption(options, "participant_purpose");
+  const participants = [
+    { userId: result.space.attorneyDiscordId === attorneyDiscordId ? "" : attorneyDiscordId, purpose: "staff_selected_attorney" },
+    { userId: snowflakeOption(options, "secondary_counsel"), purpose: "secondary_counsel" },
+    { userId: snowflakeOption(options, "judge"), purpose: "judge" },
+    { userId: snowflakeOption(options, "add_user"), purpose: participantPurpose || "additional_participant" }
+  ].filter((entry) => entry.userId && entry.userId !== result.space.attorneyDiscordId && entry.userId !== result.space.requesterDiscordId);
+
+  const seen = new Set<string>();
+  for (const participant of participants) {
+    if (seen.has(participant.userId)) continue;
+    seen.add(participant.userId);
+    const added = await addUserToLawyerResponseSpace(env, ctx, result.detail, result.space, participant.userId, {
+      reason,
+      purpose: participant.purpose,
+      actorCanOverrideParticipantGate: true
+    });
+    if (!added.ok) return messageResponse([...lines, added.message].join("\n"), true);
+    lines.push(added.message);
+  }
+
+  return messageResponse(lines.join("\n"), true);
+}
+
+async function ensureLawyerResponseSpace(
+  env: Env,
+  ctx: AuthContext,
+  requestIdOrNumber: string,
+  attorneyDiscordId: string,
+  options: LawyerResponseSpaceOptions
+): Promise<LawyerResponseEnsureResult> {
+  if (!env.DB) return { ok: false, response: messageResponse("D1 is required for lawyer request responses.", true) };
+  const detail = await getServiceRequestDetail(env, requestIdOrNumber);
+  if (!detail) return { ok: false, response: messageResponse("Lawyer request not found.", true) };
+  if (detail.requestType !== "LAWYER") return { ok: false, response: messageResponse("That request is not a lawyer request.", true) };
+  if (!validDiscordId(attorneyDiscordId)) return { ok: false, response: messageResponse("Missing or invalid attorney Discord user.", true) };
+  if (options.eventType === "LAWYER_RESPONSE_CLAIMED" && !canRespondToLawyerRequest(ctx)) {
+    return { ok: false, response: messageResponse("Only authorized attorneys or DOJ legal staff may respond to lawyer requests.", true) };
+  }
+
+  const attorneyAvailability = await lawyerResponseMemberAvailability(env, attorneyDiscordId, attorneyDiscordId === ctx.user.discordId ? "attorney-self" : "attorney-other");
+  if (!attorneyAvailability.ok) return { ok: false, response: messageResponse(attorneyAvailability.message, true) };
+
+  const requesterDiscordId = validDiscordId(detail.requesterDiscordId) ? detail.requesterDiscordId : "";
+  if (!requesterDiscordId) {
+    return {
+      ok: false,
+      response: messageResponse("Cannot create a private response space because the requester's Discord account is not linked. Ask staff to contact them through the portal request record.", true)
+    };
+  }
+  const requesterAvailability = await lawyerResponseMemberAvailability(env, requesterDiscordId, "requester");
+  if (!requesterAvailability.ok) return { ok: false, response: messageResponse(requesterAvailability.message, true) };
+
+  const existing = latestLawyerResponseSpaceFromDetail(detail);
+  if (existing) {
+    const availability = await fetchExistingLawyerResponseChannel(env, existing);
+    if (availability.exists) {
+      if (availability.channel) await reopenLawyerResponseThreadIfArchived(env, availability.channel);
+      if (options.duplicateMode === "block-other-attorney" && existing.attorneyDiscordId !== attorneyDiscordId) {
+        return {
+          ok: false,
+          response: messageResponse(`This request is already claimed by <@${existing.attorneyDiscordId}>. Staff may override or add another attorney if needed.`, true)
+        };
+      }
+      return {
+        ok: true,
+        detail,
+        space: existing,
+        created: false,
+        message: `Private attorney response space already exists for **${detail.requestNumber}**: ${discordChannelUrl(env, lawyerResponseSpaceChannelId(existing))}`
+      };
+    }
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "LAWYER_RESPONSE_SPACE_STALE", "Stored attorney response space was not found in Discord; a new space may be created.", {
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      responseThreadId: existing.responseThreadId,
+      responseChannelId: existing.responseChannelId,
+      previousAttorneyDiscordId: existing.attorneyDiscordId
+    });
+  }
+
+  const originalChannelId = validDiscordId(options.originalChannelId) ? options.originalChannelId : detail.discordPublicChannelId;
+  if (!validDiscordId(originalChannelId)) {
+    return { ok: false, response: messageResponse("Cannot create a private response space because the public lawyer request channel is not linked to this request.", true) };
+  }
+  const originalMessageId = validDiscordId(options.originalMessageId) ? options.originalMessageId : detail.discordTicketMessageId;
+
+  let created: CreatedLawyerResponseSpace;
+  try {
+    created = await createLawyerResponseSpace(env, detail, {
+      requesterDiscordId,
+      attorneyDiscordId,
+      originalChannelId
+    });
+  } catch (cause) {
+    return { ok: false, response: messageResponse(`Could not create a private attorney response space for **${detail.requestNumber}**: ${safeError(cause)}`, true) };
+  }
+
+  const createdAt = new Date().toISOString();
+  const space: LawyerResponseSpace = {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    attorneyDiscordId,
+    requesterDiscordId,
+    responseThreadId: created.kind === "thread" ? created.id : null,
+    responseChannelId: created.kind === "channel" ? created.id : null,
+    originalMessageId: originalMessageId ?? null,
+    originalChannelId,
+    eventType: options.eventType,
+    actorUserId: ctx.user.id,
+    createdAt
+  };
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, options.eventType, options.eventType === "LAWYER_RESPONSE_CLAIMED" ? "Lawyer request claimed by an attorney from Discord." : "Attorney response space created by staff from Discord.", {
+    attorneyDiscordId,
+    requesterDiscordId,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    originalMessageId: space.originalMessageId,
+    originalChannelId,
+    requestNumber: detail.requestNumber,
+    requestId: detail.id,
+    createdAt,
+    source: options.source,
+    reason: options.reason || null,
+    fallbackReason: created.fallbackReason ?? null
+  });
+  await audit(env, options.eventType, {
+    request_id: detail.id,
+    request_number: detail.requestNumber,
+    attorney_discord_id: attorneyDiscordId,
+    requester_discord_id: requesterDiscordId,
+    response_thread_id: space.responseThreadId,
+    response_channel_id: space.responseChannelId
+  }, ctx.user.id);
+  await postPublicLawyerClaimNotice(env, detail, originalChannelId).catch((cause) => {
+    console.warn(JSON.stringify({
+      event: "lawyer_response_public_notice_failed",
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      channelId: originalChannelId,
+      cause: safeError(cause)
+    }));
+  });
+
+  return {
+    ok: true,
+    detail,
+    space,
+    created: true,
+    message: `Private attorney response space opened for **${detail.requestNumber}**: ${discordChannelUrl(env, created.id)}`
+  };
+}
+
+async function createLawyerResponseSpace(
+  env: Env,
+  detail: ServiceRequestDetail,
+  input: { requesterDiscordId: string; attorneyDiscordId: string; originalChannelId: string }
+): Promise<CreatedLawyerResponseSpace> {
+  let threadFailure: string | null = null;
+  try {
+    return await createPrivateLawyerResponseThread(env, detail, input);
+  } catch (cause) {
+    threadFailure = safeError(cause);
+    console.warn(JSON.stringify({
+      event: "lawyer_response_thread_create_failed",
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      channelId: input.originalChannelId,
+      cause: threadFailure
+    }));
+  }
+  return createLawyerResponseFallbackChannel(env, detail, input, threadFailure);
+}
+
+async function createPrivateLawyerResponseThread(
+  env: Env,
+  detail: ServiceRequestDetail,
+  input: { requesterDiscordId: string; attorneyDiscordId: string; originalChannelId: string }
+): Promise<CreatedLawyerResponseSpace> {
+  const response = await discordApi(env, `/channels/${input.originalChannelId}/threads`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: lawyerResponseSpaceName(detail),
+      type: PRIVATE_THREAD,
+      invitable: false,
+      auto_archive_duration: 10080
+    })
+  });
+  if (!response.ok) throw new Error(`Discord private thread create failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  const thread = await response.json() as { id: string; name?: string; type?: number };
+  try {
+    await addLawyerThreadMember(env, thread.id, input.requesterDiscordId);
+    await addLawyerThreadMember(env, thread.id, input.attorneyDiscordId);
+    await postLawyerResponseOpeningMessage(env, thread.id, detail, input.requesterDiscordId, input.attorneyDiscordId);
+  } catch (cause) {
+    await discordApi(env, `/channels/${thread.id}`, { method: "DELETE" }).catch(() => null);
+    throw cause;
+  }
+  return { kind: "thread", id: thread.id, name: thread.name ?? lawyerResponseSpaceName(detail) };
+}
+
+async function createLawyerResponseFallbackChannel(
+  env: Env,
+  detail: ServiceRequestDetail,
+  input: { requesterDiscordId: string; attorneyDiscordId: string },
+  threadFailure: string | null
+): Promise<CreatedLawyerResponseSpace> {
+  const categoryId = await lawyerResponseCategoryId(env);
+  if (!categoryId) {
+    throw new Error("Could not create a private response thread and no lawyer response category is configured for private channel fallback. Bot may need Create Private Threads, Send Messages in Threads, and Manage Threads in request-a-lawyer.");
+  }
+  const guildId = requireEnv(env, "DISCORD_GUILD_ID");
+  const botUser = await fetchBotUser(env);
+  const allow = (VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | READ_HISTORY).toString();
+  const botAllow = (VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | READ_HISTORY | MANAGE_CHANNELS | MANAGE_ROLES).toString();
+  const response = await discordApi(env, `/guilds/${guildId}/channels`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: lawyerResponseSpaceName(detail),
+      type: GUILD_TEXT_CHANNEL,
+      parent_id: categoryId,
+      topic: `Private attorney response space for ${detail.requestNumber}. Do not share private details outside authorized workflow.`,
+      permission_overwrites: [
+        { id: guildId, type: 0, allow: "0", deny: VIEW_CHANNEL.toString() },
+        { id: botUser.id, type: 1, allow: botAllow, deny: "0" },
+        { id: input.requesterDiscordId, type: 1, allow, deny: "0" },
+        { id: input.attorneyDiscordId, type: 1, allow, deny: "0" }
+      ]
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Discord fallback response channel create failed with ${response.status}: ${await responseTextSnippet(response)}${threadFailure ? `; thread failure: ${threadFailure}` : ""}`);
+  }
+  const channel = await response.json() as { id: string; name?: string };
+  await postLawyerResponseOpeningMessage(env, channel.id, detail, input.requesterDiscordId, input.attorneyDiscordId);
+  return { kind: "channel", id: channel.id, name: channel.name ?? lawyerResponseSpaceName(detail), fallbackReason: threadFailure };
+}
+
+async function addUserToLawyerResponseSpaceCommand(env: Env, ctx: AuthContext, linked: LinkedLawyerResponseSpace, options: Map<string, OptionValue>) {
+  if (!canManageLawyerResponseAccess(ctx)) return messageResponse("Only authorized legal/court staff may manage attorney response space participants.", true);
+  const userId = snowflakeOption(options, "user");
+  if (!userId) return messageResponse("Missing required option: user.", true);
+  const added = await addUserToLawyerResponseSpace(env, ctx, linked.detail, linked.space, userId, {
+    reason: stringOption(options, "reason"),
+    purpose: "add-user",
+    actorCanOverrideParticipantGate: canOverrideLawyerParticipantGate(ctx)
+  });
+  return messageResponse(added.message, true);
+}
+
+async function addRoleToLawyerResponseSpaceCommand(env: Env, ctx: AuthContext, linked: LinkedLawyerResponseSpace, options: Map<string, OptionValue>) {
+  if (linked.space.responseThreadId || (linked.channel && isThreadChannel(linked.channel))) {
+    return messageResponse("This command must be used in a ticket channel, not inside a thread.", true);
+  }
+  if (!canManageLawyerResponseAccess(ctx)) return messageResponse("Only authorized legal/court staff may manage attorney response space participants.", true);
+  const roleId = snowflakeOption(options, "role");
+  if (!roleId) return messageResponse("Missing required option: role.", true);
+  if (!await roleAllowedInLawyerResponseSpace(env, roleId)) {
+    return messageResponse("Only authorized legal/court staff may be added to attorney response spaces.", true);
+  }
+  const channelId = linked.space.responseChannelId;
+  if (!validDiscordId(channelId)) return messageResponse("This command must be used in a ticket channel, not inside a thread.", true);
+  const reason = stringOption(options, "reason");
+  const allow = await ticketAccessAllow(env, channelId);
+  await putTicketPermissionOverwrite(env, channelId, roleId, 0, allow);
+  await postTicketMessage(env, channelId, withReason(`Added <@&${roleId}> to this attorney response space.`, reason), { roles: [roleId] });
+  await logLawyerResponseParticipantAdded(env, ctx, linked.detail, linked.space, {
+    participantType: "role",
+    discordId: roleId,
+    purpose: "add-role",
+    reason,
+    allowPermissions: allow.toString()
+  });
+  return messageResponse(`Added role to attorney response space for **${linked.detail.requestNumber}**.`, true);
+}
+
+async function addUserToLawyerResponseSpace(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  space: LawyerResponseSpace,
+  userId: string,
+  options: { reason: string; purpose: string; actorCanOverrideParticipantGate: boolean }
+): Promise<{ ok: boolean; message: string }> {
+  const validation = await validateLawyerResponseUserParticipant(env, userId, options.actorCanOverrideParticipantGate);
+  if (!validation.ok) return validation;
+  const channelId = lawyerResponseSpaceChannelId(space);
+  if (!validDiscordId(channelId)) return { ok: false, message: "Attorney response space is missing its Discord channel reference." };
+  if (space.responseThreadId) {
+    await addLawyerThreadMember(env, space.responseThreadId, userId);
+  } else {
+    const allow = await ticketAccessAllow(env, channelId);
+    await putTicketPermissionOverwrite(env, channelId, userId, 1, allow);
+  }
+  await postTicketMessage(env, channelId, withReason(`Added <@${userId}> to this attorney response space.`, options.reason), { users: [userId] });
+  await logLawyerResponseParticipantAdded(env, ctx, detail, space, {
+    participantType: "user",
+    discordId: userId,
+    purpose: options.purpose,
+    reason: options.reason,
+    allowPermissions: space.responseThreadId ? null : (await ticketAccessAllow(env, channelId)).toString()
+  });
+  return { ok: true, message: `Added user to attorney response space for **${detail.requestNumber}**.` };
+}
+
+async function validateLawyerResponseUserParticipant(env: Env, userId: string, actorCanOverrideParticipantGate: boolean): Promise<{ ok: true } | { ok: false; message: string }> {
+  const member = await fetchGuildMember(env, userId).catch(() => null);
+  if (!member) return { ok: false, message: "Cannot add that user because they are not currently available in the Discord server." };
+  const timeoutUntil = parseDiscordTimeout(member.communication_disabled_until);
+  if (timeoutUntil && timeoutUntil.getTime() > Date.now()) {
+    return { ok: false, message: "Cannot add that user because they are currently timed out in Discord." };
+  }
+  if (actorCanOverrideParticipantGate) return { ok: true };
+  if (await memberHasAnyLogicalPermission(env, member.roles, LAWYER_RESPONSE_PARTICIPANT_PERMISSIONS)) return { ok: true };
+  return { ok: false, message: "Only authorized legal/court staff may be added to attorney response spaces." };
+}
+
+async function linkedLawyerResponseSpace(env: Env, channelId: string | undefined): Promise<LinkedLawyerResponseSpace | null> {
+  if (!env.DB || !validDiscordId(channelId)) return null;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT request_id as requestId, actor_user_id as actorUserId, event_type as eventType,
+        metadata_json as metadataJson, created_at as createdAt
+       FROM service_request_events
+       WHERE event_type IN ('LAWYER_RESPONSE_CLAIMED', 'LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF')
+         AND (
+           json_extract(metadata_json, '$.responseThreadId') = ?
+           OR json_extract(metadata_json, '$.responseChannelId') = ?
+         )
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    )
+      .bind(channelId, channelId)
+      .first<{ requestId: string; actorUserId: string | null; eventType: string; metadataJson: string; createdAt: string }>();
+    if (!row) return null;
+    const metadata = parseMetadataJson(row.metadataJson);
+    const detail = await getServiceRequestDetail(env, row.requestId);
+    if (!detail || detail.requestType !== "LAWYER") return null;
+    const space = lawyerResponseSpaceFromMetadata(metadata, {
+      requestId: row.requestId,
+      requestNumber: detail.requestNumber,
+      eventType: row.eventType,
+      actorUserId: row.actorUserId,
+      createdAt: row.createdAt
+    });
+    if (!space) return null;
+    return { detail, space, channel: await fetchDiscordChannelIfAvailable(env, channelId) };
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "linked_lawyer_response_space_lookup_failed", channelId, cause: safeError(cause) }));
+    return null;
+  }
+}
+
+async function logLawyerResponseParticipantAdded(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  space: LawyerResponseSpace,
+  input: { participantType: "user" | "role"; discordId: string; purpose: string; reason: string; allowPermissions: string | null }
+) {
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "LAWYER_RESPONSE_PARTICIPANT_ADDED", "Participant added to attorney response space from Discord.", {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    participantType: input.participantType,
+    participantDiscordId: input.participantType === "user" ? input.discordId : null,
+    participantRoleId: input.participantType === "role" ? input.discordId : null,
+    participantPurpose: input.purpose || null,
+    reason: input.reason || null,
+    allowPermissions: input.allowPermissions,
+    addedByDiscordId: ctx.user.discordId,
+    attorneyDiscordId: space.attorneyDiscordId,
+    requesterDiscordId: space.requesterDiscordId,
+    createdAt: new Date().toISOString()
+  });
+  await audit(env, "LAWYER_RESPONSE_PARTICIPANT_ADDED", {
+    request_id: detail.id,
+    request_number: detail.requestNumber,
+    response_thread_id: space.responseThreadId,
+    response_channel_id: space.responseChannelId,
+    participant_type: input.participantType,
+    participant_discord_id: input.discordId
+  }, ctx.user.id);
+}
+
+async function lawyerResponseMemberAvailability(env: Env, discordId: string, kind: "attorney-self" | "attorney-other" | "requester"): Promise<{ ok: true } | { ok: false; message: string }> {
+  const member = await fetchGuildMember(env, discordId).catch(() => null);
+  if (!member) {
+    if (kind === "requester") return { ok: false, message: "Cannot add the requester because they are not currently available in the Discord server." };
+    return { ok: false, message: "Cannot add the selected attorney because they are not currently available in the Discord server." };
+  }
+  const timeoutUntil = parseDiscordTimeout(member.communication_disabled_until);
+  if (timeoutUntil && timeoutUntil.getTime() > Date.now()) {
+    if (kind === "requester") return { ok: false, message: "The requester is currently timed out in Discord, so the bot cannot open a private response thread until the timeout expires." };
+    if (kind === "attorney-self") return { ok: false, message: "You are currently timed out and cannot claim/respond to lawyer requests." };
+    return { ok: false, message: "The selected attorney is currently timed out in Discord and cannot be assigned to lawyer requests until the timeout expires." };
+  }
+  return { ok: true };
+}
+
+async function lawyerResponseCategoryId(env: Env): Promise<string | null> {
+  for (const key of LAWYER_RESPONSE_CATEGORY_KEYS) {
+    const row = await env.DB!.prepare(
+      "SELECT discord_channel_id as id FROM discord_channel_mappings WHERE mapping_key = ? AND discord_channel_id != '' ORDER BY is_reference_only ASC, updated_at DESC LIMIT 1"
+    )
+      .bind(key)
+      .first<{ id: string | null }>();
+    if (validDiscordId(row?.id)) return row.id;
+  }
+  return null;
+}
+
+async function addLawyerThreadMember(env: Env, threadId: string, userId: string): Promise<void> {
+  const response = await discordApi(env, `/channels/${threadId}/thread-members/${userId}`, { method: "PUT" });
+  if (!response.ok) throw new Error(`Discord thread member add failed with ${response.status}: ${await responseTextSnippet(response)}`);
+}
+
+async function postLawyerResponseOpeningMessage(env: Env, channelId: string, detail: ServiceRequestDetail, requesterDiscordId: string, attorneyDiscordId: string) {
+  await postTicketMessage(env, channelId, [
+    `Private attorney response space for ${detail.requestNumber}.`,
+    "",
+    `Requester: <@${requesterDiscordId}>`,
+    `Attorney: <@${attorneyDiscordId}>`,
+    "",
+    "Secondary counsel, assigned judges, or DOJ oversight may be added when needed by authorized staff. Use this space to clarify custody status, charges, evidence, availability, and representation next steps. Do not share private or privileged details outside this thread/channel."
+  ].join("\n"), { users: [requesterDiscordId, attorneyDiscordId] });
+}
+
+async function postPublicLawyerClaimNotice(env: Env, detail: ServiceRequestDetail, channelId: string) {
+  const response = await discordApi(env, `/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: `${detail.requestNumber} has been picked up by an attorney. Private response space opened.`,
+      allowed_mentions: { parse: [], users: [], roles: [] }
+    })
+  });
+  if (!response.ok) throw new Error(`Discord lawyer claim notice failed with ${response.status}: ${await responseTextSnippet(response)}`);
+}
+
+async function fetchExistingLawyerResponseChannel(env: Env, space: LawyerResponseSpace): Promise<{ exists: boolean; channel: DiscordChannelDetails | null }> {
+  const channelId = lawyerResponseSpaceChannelId(space);
+  if (!validDiscordId(channelId)) return { exists: false, channel: null };
+  const response = await discordApi(env, `/channels/${channelId}`);
+  if (response.status === 404) return { exists: false, channel: null };
+  if (!response.ok) {
+    console.warn(JSON.stringify({
+      event: "lawyer_response_space_fetch_failed",
+      channelId,
+      status: response.status,
+      details: (await response.text().catch(() => "")).slice(0, 180)
+    }));
+    return { exists: true, channel: null };
+  }
+  return { exists: true, channel: await response.json() as DiscordChannelDetails };
+}
+
+async function reopenLawyerResponseThreadIfArchived(env: Env, channel: DiscordChannelDetails): Promise<void> {
+  if (!isThreadChannel(channel) || !channel.thread_metadata?.archived) return;
+  const response = await discordApi(env, `/channels/${channel.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: false })
+  });
+  if (!response.ok) {
+    console.warn(JSON.stringify({
+      event: "lawyer_response_thread_reopen_failed",
+      channelId: channel.id,
+      status: response.status,
+      details: (await response.text().catch(() => "")).slice(0, 180)
+    }));
+  }
+}
+
+async function fetchDiscordChannelIfAvailable(env: Env, channelId: string | undefined): Promise<DiscordChannelDetails | null> {
+  if (!validDiscordId(channelId)) return null;
+  try {
+    return await fetchDiscordChannel(env, channelId);
+  } catch {
+    return null;
+  }
+}
+
+async function isCurrentChannelThread(env: Env, channelId: string | undefined): Promise<boolean> {
+  const channel = await fetchDiscordChannelIfAvailable(env, channelId);
+  return channel ? isThreadChannel(channel) : false;
+}
+
+function latestLawyerResponseSpaceFromDetail(detail: ServiceRequestDetail): LawyerResponseSpace | null {
+  const eventTypes: readonly string[] = LAWYER_RESPONSE_EVENT_TYPES;
+  for (const event of [...detail.events].reverse()) {
+    if (!eventTypes.includes(event.eventType)) continue;
+    const space = lawyerResponseSpaceFromMetadata(event.metadata, {
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      eventType: event.eventType,
+      actorUserId: event.actorUserId,
+      createdAt: event.createdAt
+    });
+    if (space) return space;
+  }
+  return null;
+}
+
+function lawyerResponseSpaceFromMetadata(
+  metadata: Record<string, unknown>,
+  fallback: { requestId: string; requestNumber: string; eventType: string; actorUserId: string | null; createdAt: string }
+): LawyerResponseSpace | null {
+  const attorneyDiscordId = metadataString(metadata, "attorneyDiscordId");
+  const requesterDiscordId = metadataString(metadata, "requesterDiscordId");
+  const responseThreadId = metadataString(metadata, "responseThreadId");
+  const responseChannelId = metadataString(metadata, "responseChannelId");
+  if (!validDiscordId(attorneyDiscordId) || !validDiscordId(requesterDiscordId)) return null;
+  if (!validDiscordId(responseThreadId) && !validDiscordId(responseChannelId)) return null;
+  return {
+    requestId: metadataString(metadata, "requestId") || fallback.requestId,
+    requestNumber: metadataString(metadata, "requestNumber") || fallback.requestNumber,
+    attorneyDiscordId,
+    requesterDiscordId,
+    responseThreadId: validDiscordId(responseThreadId) ? responseThreadId : null,
+    responseChannelId: validDiscordId(responseChannelId) ? responseChannelId : null,
+    originalMessageId: validDiscordId(metadataString(metadata, "originalMessageId")) ? metadataString(metadata, "originalMessageId") : null,
+    originalChannelId: validDiscordId(metadataString(metadata, "originalChannelId")) ? metadataString(metadata, "originalChannelId") : null,
+    eventType: fallback.eventType,
+    actorUserId: fallback.actorUserId,
+    createdAt: metadataString(metadata, "createdAt") || fallback.createdAt
+  };
+}
+
+function lawyerResponseSpaceChannelId(space: LawyerResponseSpace): string {
+  return space.responseThreadId ?? space.responseChannelId ?? "";
+}
+
+function lawyerResponseSpaceName(detail: ServiceRequestDetail): string {
+  return `${detail.requestNumber}-attorney-response`
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9-]+/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "")
+    .slice(0, 90);
+}
+
+function canRespondToLawyerRequest(ctx: AuthContext): boolean {
+  return hasActionPermission(ctx, "ADMIN")
+    || hasActionPermission(ctx, "MANAGE_REQUESTS")
+    || hasAnyLogicalPermission(ctx, LAWYER_RESPONSE_PERMISSIONS);
+}
+
+function canManageLawyerResponseAccess(ctx: AuthContext): boolean {
+  return canOverrideLawyerParticipantGate(ctx) || hasAnyLogicalPermission(ctx, LAWYER_RESPONSE_PARTICIPANT_PERMISSIONS);
+}
+
+function canOverrideLawyerParticipantGate(ctx: AuthContext): boolean {
+  return hasActionPermission(ctx, "ADMIN") || hasActionPermission(ctx, "MANAGE_REQUESTS");
+}
+
+function hasAnyLogicalPermission(ctx: AuthContext, permissions: readonly LogicalPermission[]): boolean {
+  return ctx.permissions.includes("ADMIN") || permissions.some((permission) => ctx.permissions.includes(permission));
+}
+
+async function memberHasAnyLogicalPermission(env: Env, roleIds: string[], permissions: readonly LogicalPermission[]): Promise<boolean> {
+  for (const roleId of roleIds) {
+    const row = await env.DB!.prepare("SELECT permission_key as permissionKey FROM role_mappings WHERE discord_role_id = ? AND is_reference_only = 0")
+      .bind(roleId)
+      .first<{ permissionKey: LogicalPermission | null }>();
+    if (row?.permissionKey && permissions.includes(row.permissionKey)) return true;
+  }
+  return false;
+}
+
+async function roleAllowedInLawyerResponseSpace(env: Env, roleId: string): Promise<boolean> {
+  const row = await env.DB!.prepare("SELECT permission_key as permissionKey FROM role_mappings WHERE discord_role_id = ? AND is_reference_only = 0")
+    .bind(roleId)
+    .first<{ permissionKey: LogicalPermission | null }>();
+  return Boolean(row?.permissionKey && LAWYER_RESPONSE_PARTICIPANT_PERMISSIONS.includes(row.permissionKey));
+}
+
+function isThreadChannel(channel: DiscordChannelDetails): boolean {
+  return channel.type === ANNOUNCEMENT_THREAD || channel.type === PUBLIC_THREAD || channel.type === PRIVATE_THREAD;
+}
+
+function parseDiscordTimeout(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseLawyerResponseCustomId(customId: string): { action: "claim"; requestId: string } | null {
+  const parts = customId.split(":");
+  if (parts.length !== 3 || parts[0] !== "lawyer_response" || parts[1] !== "claim" || !parts[2]) return null;
+  return { action: "claim", requestId: parts[2] };
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function parseMetadataJson(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }
 
 async function claimTicketForDetail(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, note: string, commandName: string) {
@@ -1014,7 +1726,7 @@ function logInteraction(
 }
 
 function messageResponse(content: string, ephemeral = true, components?: DiscordComponent[]): DiscordInteractionResponse {
-  return { type: 4, data: { content: truncate(content, 1900), flags: ephemeral ? EPHEMERAL : undefined, components } };
+  return { type: 4, data: { content: truncate(content, 1900), flags: ephemeral ? EPHEMERAL : undefined, components, allowed_mentions: { parse: [] } } };
 }
 
 function discordChannelUrl(env: Env, channelId: string | number): string {
@@ -1292,6 +2004,12 @@ function validDiscordId(value: string | null | undefined): value is string {
 interface DiscordChannelDetails {
   id: string;
   name?: string;
+  type?: number;
+  parent_id?: string | null;
+  thread_metadata?: {
+    archived?: boolean;
+    locked?: boolean;
+  };
   permission_overwrites?: DiscordPermissionOverwrite[];
 }
 
@@ -1309,4 +2027,55 @@ interface TicketTarget {
   channelId: string;
   channelName: string | null;
   requestType: ServiceRequestType | "BAR_EXAM_FOLLOWUP";
+}
+
+type LawyerResponseEventType = (typeof LAWYER_RESPONSE_EVENT_TYPES)[number];
+
+interface LawyerResponseSpaceOptions {
+  eventType: LawyerResponseEventType;
+  source: string;
+  duplicateMode: "block-other-attorney" | "return-existing";
+  originalChannelId?: string | null;
+  originalMessageId?: string | null;
+  reason?: string;
+}
+
+interface LawyerResponseSpace {
+  requestId: string;
+  requestNumber: string;
+  attorneyDiscordId: string;
+  requesterDiscordId: string;
+  responseThreadId: string | null;
+  responseChannelId: string | null;
+  originalMessageId: string | null;
+  originalChannelId: string | null;
+  eventType: string;
+  actorUserId: string | null;
+  createdAt: string;
+}
+
+interface LinkedLawyerResponseSpace {
+  detail: ServiceRequestDetail;
+  space: LawyerResponseSpace;
+  channel: DiscordChannelDetails | null;
+}
+
+type LawyerResponseEnsureResult =
+  | {
+      ok: true;
+      detail: ServiceRequestDetail;
+      space: LawyerResponseSpace;
+      created: boolean;
+      message: string;
+    }
+  | {
+      ok: false;
+      response: DiscordInteractionResponse;
+    };
+
+interface CreatedLawyerResponseSpace {
+  kind: "thread" | "channel";
+  id: string;
+  name: string;
+  fallbackReason?: string | null;
 }

@@ -306,7 +306,8 @@ export async function postServiceRequestEmbedToRequestChannel(
     body: JSON.stringify({
       content,
       allowed_mentions: shouldPing ? allowedMentions(mentions) : allowedMentions({ userIds: [], roleIds: [] }),
-      embeds: [publicServiceRequestEmbed(request)]
+      embeds: [publicServiceRequestEmbed(request)],
+      components: publicRequestComponents(request)
     })
   });
   if (!response.ok) {
@@ -326,7 +327,8 @@ export async function postServiceRequestEmbedToRequestChannel(
         body: JSON.stringify({
           content: serviceRequestMentionContent(request, mentions, true),
           allowed_mentions: allowedMentions(mentions),
-          embeds: [publicServiceRequestEmbed(request)]
+          embeds: [publicServiceRequestEmbed(request)],
+          components: publicRequestComponents(request)
         })
       });
       if (!repostResponse.ok) throw await DiscordApiError.fromResponse(repostResponse, {
@@ -575,6 +577,16 @@ function privateTicketComponents(env: Env, request: ServiceRequestDetail): Disco
   const portalUrl = requestPortalUrl(env, request.id);
   if (portalUrl) components.push({ type: 2, style: 5, label: "View Portal Request", url: portalUrl });
   return [{ type: 1, components }];
+}
+
+function publicRequestComponents(request: ServiceRequestDetail): DiscordActionRowComponent[] {
+  if (request.requestType !== "LAWYER") return [];
+  return [{
+    type: 1,
+    components: [
+      { type: 2, style: 1, label: "Claim / Respond", custom_id: `lawyer_response:claim:${request.id}` }
+    ]
+  }];
 }
 
 function publicServiceRequestEmbed(request: ServiceRequestDetail) {

@@ -81,17 +81,17 @@ const commands = [
   ticketCommand("delete-ticket", "Transcript then delete a private DOJ ticket channel.", true),
   {
     name: "add-user",
-    description: "Add a Discord user to the current private DOJ service ticket.",
+    description: "Add a Discord user to the current ticket or attorney response space.",
     options: [
-      userOption("user", "User to add to this private ticket.", true),
+      userOption("user", "User to add to this ticket or attorney response space.", true),
       stringOption("reason", "Optional reason for the ticket event log.", false)
     ]
   },
   {
     name: "add-role",
-    description: "Add a Discord role to the current private DOJ service ticket.",
+    description: "Add a Discord role to the current private ticket or response channel.",
     options: [
-      roleOption("role", "Role to add to this private ticket.", true),
+      roleOption("role", "Role to add to this private ticket or response channel.", true),
       stringOption("reason", "Optional reason for the ticket event log.", false)
     ]
   },
@@ -112,6 +112,24 @@ const commands = [
     name: "unclaim-ticket",
     description: "Clear the current private DOJ service ticket claim.",
     options: [stringOption("note", "Optional unclaim note.", false)]
+  },
+  {
+    name: "claim-lawyer-request",
+    description: "Claim/respond to a public lawyer request and open the private response space.",
+    options: [stringOption("request_number", "LAW request number or internal request ID.", true)]
+  },
+  {
+    name: "lawyer-thread",
+    description: "Create or reopen a private attorney response space for a lawyer request.",
+    options: [
+      stringOption("request_number", "LAW request number or internal request ID.", true),
+      userOption("attorney", "Primary attorney to add to the response space.", true),
+      userOption("secondary_counsel", "Optional secondary counsel to add.", false),
+      userOption("judge", "Optional judge or court oversight user to add.", false),
+      userOption("add_user", "Optional additional authorized participant to add.", false),
+      stringOption("participant_purpose", "Purpose for the optional additional participant.", false),
+      stringOption("reason", "Optional reason for the request event log.", false)
+    ]
   },
   recordCommand("delete-record", "Soft-delete a DOJ Portal record."),
   recordCommand("restore-record", "Restore a soft-deleted DOJ Portal record. Justice/Chief only."),
