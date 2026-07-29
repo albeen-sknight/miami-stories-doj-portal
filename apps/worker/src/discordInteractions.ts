@@ -45,6 +45,12 @@ const PUBLIC_THREAD = 11;
 const PRIVATE_THREAD = 12;
 const TICKET_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_REQUESTS", "ADMIN"];
 const LAWYER_RESPONSE_EVENT_TYPES = ["LAWYER_RESPONSE_CLAIMED", "LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF"] as const;
+const LAWYER_RESPONSE_DETAILS_POSTED_EVENT = "LAWYER_RESPONSE_DETAILS_POSTED";
+const LAWYER_RESPONSE_DETAILS_NOTE = "These details are posted only inside this private attorney response space. Do not repost them publicly.";
+const LAWYER_RESPONSE_DETAILS_MAX_EMBEDS = 8;
+const LAWYER_RESPONSE_DETAILS_MAX_FIELD_NAME = 256;
+const LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE = 1000;
+const LAWYER_RESPONSE_DETAILS_MAX_FIELDS_PER_EMBED = 4;
 const LAWYER_RESPONSE_PERMISSIONS: LogicalPermission[] = [
   "BAR_ACTIVE",
   "PUBLIC_DEFENDER_CERTIFIED",
@@ -64,6 +70,55 @@ const LAWYER_RESPONSE_PARTICIPANT_PERMISSIONS: LogicalPermission[] = [
   "ADMIN"
 ];
 const LAWYER_RESPONSE_CATEGORY_KEYS = ["REQUEST_LAWYER_CATEGORY", "LAWYER_REQUESTS_CATEGORY"] as const;
+const LAWYER_CORE_DETAIL_FIELDS: LawyerPayloadFieldSpec[] = [
+  { key: "characterFullName", label: "Character Full Name", inline: true },
+  { key: "citizenId", label: "Citizen ID", inline: true },
+  { key: "representationType", label: "Representation Type", inline: true },
+  { key: "representationSubtype", label: "Representation Subtype", inline: true },
+  { key: "preferredRepresentation", label: "Preferred Representation", inline: true },
+  { key: "urgency", label: "Urgency", inline: true },
+  { key: "publicSummary", label: "Public Summary" },
+  { key: "briefDescription", label: "Private Case Details" },
+  { key: "preferredContactMethod", label: "Preferred Contact Method", inline: true }
+];
+const LAWYER_ROUTE_DETAIL_FIELDS: Record<string, LawyerPayloadFieldSpec[]> = {
+  "Criminal / Cellside": [
+    { key: "inCustody", label: "In Custody?", inline: true },
+    { key: "agencyHolding", label: "Agency Holding / Arresting Agency", inline: true },
+    { key: "chargesReason", label: "Charges or Reason for Detention" },
+    { key: "arrestingOfficer", label: "Arresting Officer", inline: true },
+    { key: "caseNumber", label: "Case / MDT / Court / Request Number", inline: true },
+    { key: "evidenceLinks", label: "Evidence / Document Links" }
+  ],
+  "Civil advice": [
+    { key: "opposingParty", label: "Opposing Party / Respondent", inline: true },
+    { key: "agencyDepartmentInvolved", label: "Agency or Department Involved", inline: true },
+    { key: "formalCivilFiled", label: "Formal Civil Case Filed?", inline: true },
+    { key: "desiredOutcome", label: "Desired Outcome" },
+    { key: "caseNumber", label: "Case / MDT / Court / Request Number", inline: true },
+    { key: "evidenceLinks", label: "Evidence / Document Links" }
+  ],
+  "General legal advice": [
+    { key: "topicCategory", label: "Topic / Category", inline: true },
+    { key: "relatedPeopleAgencies", label: "Related People or Agencies", inline: true },
+    { key: "desiredOutcome", label: "Desired Outcome" }
+  ],
+  "Expungement advice": [
+    { key: "priorChargesCases", label: "Prior Charges / Cases" },
+    { key: "approximateCaseDate", label: "Date or Approximate Date of Case", inline: true },
+    { key: "currentStatus", label: "Current Status", inline: true },
+    { key: "desiredOutcome", label: "Desired Outcome" },
+    { key: "caseNumber", label: "Case / MDT / Court / Request Number", inline: true },
+    { key: "evidenceLinks", label: "Evidence / Document Links" }
+  ],
+  "Warrant/subpoena/evidence advice": [
+    { key: "processInvolved", label: "Process Involved", inline: true },
+    { key: "agencyRequestingParty", label: "Agency or Requesting Party", inline: true },
+    { key: "legalAdviceNeeded", label: "Legal Advice Needed" },
+    { key: "caseNumber", label: "Case / MDT / Court / Request Number", inline: true },
+    { key: "evidenceLinks", label: "Evidence / Document Links" }
+  ]
+};
 
 type InteractionType = 1 | 2 | 3;
 type OptionValue = string | number | boolean;
@@ -880,6 +935,7 @@ async function ensureLawyerResponseSpace(
     const availability = await fetchExistingLawyerResponseChannel(env, existing);
     if (availability.exists) {
       if (availability.channel) await reopenLawyerResponseThreadIfArchived(env, availability.channel);
+      await ensureLawyerResponseDetailsPosted(env, ctx, detail, existing);
       if (options.duplicateMode === "block-other-attorney" && existing.attorneyDiscordId !== attorneyDiscordId) {
         return {
           ok: false,
@@ -956,6 +1012,7 @@ async function ensureLawyerResponseSpace(
     response_thread_id: space.responseThreadId,
     response_channel_id: space.responseChannelId
   }, ctx.user.id);
+  await ensureLawyerResponseDetailsPosted(env, ctx, detail, space);
   await postPublicLawyerClaimNotice(env, detail, originalChannelId).catch((cause) => {
     console.warn(JSON.stringify({
       event: "lawyer_response_public_notice_failed",
@@ -1249,6 +1306,233 @@ async function postLawyerResponseOpeningMessage(env: Env, channelId: string, det
     "",
     "Secondary counsel, assigned judges, or DOJ oversight may be added when needed by authorized staff. Use this space to clarify custody status, charges, evidence, availability, and representation next steps. Do not share private or privileged details outside this thread/channel."
   ].join("\n"), { users: [requesterDiscordId, attorneyDiscordId] });
+}
+
+async function ensureLawyerResponseDetailsPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<void> {
+  const channelId = lawyerResponseSpaceChannelId(space);
+  if (!validDiscordId(channelId)) throw new Error("Attorney response space is missing its Discord channel reference.");
+  if (await lawyerResponseDetailsAlreadyPosted(env, detail, space)) return;
+
+  const embeds = lawyerResponseDetailsEmbeds(env, detail);
+  const postedMessageIds = await postLawyerResponseDetailsEmbeds(env, channelId, embeds);
+  const postedAt = new Date().toISOString();
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, LAWYER_RESPONSE_DETAILS_POSTED_EVENT, "Private lawyer request details posted inside attorney response space.", {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    postedMessageId: postedMessageIds[0] ?? null,
+    postedMessageIds,
+    postedAt
+  });
+}
+
+async function lawyerResponseDetailsAlreadyPosted(env: Env, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<boolean> {
+  const channelId = lawyerResponseSpaceChannelId(space);
+  for (const event of detail.events) {
+    if (event.eventType !== LAWYER_RESPONSE_DETAILS_POSTED_EVENT) continue;
+    const responseThreadId = metadataString(event.metadata, "responseThreadId");
+    const responseChannelId = metadataString(event.metadata, "responseChannelId");
+    if (validDiscordId(channelId) && (responseThreadId === channelId || responseChannelId === channelId)) return true;
+  }
+  if (!env.DB || !validDiscordId(channelId)) return false;
+  const row = await env.DB.prepare(
+    `SELECT id FROM service_request_events
+     WHERE request_id = ?
+       AND event_type = ?
+       AND (
+         json_extract(metadata_json, '$.responseThreadId') = ?
+         OR json_extract(metadata_json, '$.responseChannelId') = ?
+       )
+     LIMIT 1`
+  )
+    .bind(detail.id, LAWYER_RESPONSE_DETAILS_POSTED_EVENT, channelId, channelId)
+    .first<{ id: string }>();
+  return Boolean(row?.id);
+}
+
+async function postLawyerResponseDetailsEmbeds(env: Env, channelId: string, embeds: LawyerResponseDetailsEmbed[]): Promise<string[]> {
+  const messageIds: string[] = [];
+  for (const embed of embeds) {
+    const response = await discordApi(env, `/channels/${channelId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        embeds: [embed],
+        allowed_mentions: { parse: [], users: [], roles: [] }
+      })
+    });
+    if (!response.ok) throw new Error(`Discord lawyer private details post failed with ${response.status}: ${await responseTextSnippet(response)}`);
+    const message = await response.json().catch(() => ({})) as { id?: unknown };
+    if (typeof message.id === "string") messageIds.push(message.id);
+  }
+  return messageIds;
+}
+
+function lawyerResponseDetailsEmbeds(env: Env, detail: ServiceRequestDetail): LawyerResponseDetailsEmbed[] {
+  const rawFields = lawyerResponseDetailFields(detail);
+  let fields = splitLawyerDetailFields(rawFields);
+  let truncated = false;
+  const portalUrl = lawyerRequestPortalUrl(env, detail.id);
+  const detailFieldBudget = (LAWYER_RESPONSE_DETAILS_MAX_EMBEDS * LAWYER_RESPONSE_DETAILS_MAX_FIELDS_PER_EMBED) - 1;
+  if (fields.length > detailFieldBudget) {
+    fields = fields.slice(0, Math.max(0, detailFieldBudget));
+    truncated = true;
+  }
+  if (portalUrl) {
+    fields.push({
+      name: truncated ? "View Full Request in Portal" : "Portal Request",
+      value: truncated ? `Some details were shortened for Discord limits. [View full request in portal](${portalUrl})` : `[View request in portal](${portalUrl})`,
+      inline: false
+    });
+  } else if (truncated) {
+    fields.push({
+      name: "View Full Request in Portal",
+      value: "Some details were shortened for Discord limits. Open the request in the DOJ Portal for the complete record.",
+      inline: false
+    });
+  }
+
+  const title = truncate(`Private Request Details — ${detail.requestNumber}`, 256);
+  const chunks = chunkLawyerEmbedFields(fields);
+  return chunks.map((chunk, index) => ({
+    title: index === 0 ? title : truncate(`${title} (continued)`, 256),
+    description: index === 0 ? LAWYER_RESPONSE_DETAILS_NOTE : undefined,
+    color: 0xff2fae,
+    fields: chunk,
+    footer: { text: "Private DOJ attorney response space." },
+    timestamp: detail.createdAt
+  }));
+}
+
+function lawyerResponseDetailFields(detail: ServiceRequestDetail): LawyerDetailRawField[] {
+  const payload = detail.payload;
+  const includedPayloadKeys = new Set<string>();
+  const fields: LawyerDetailRawField[] = [
+    { name: "Request Number", value: detail.requestNumber, inline: true },
+    { name: "Submitted By Discord", value: lawyerRequesterText(detail), inline: true },
+    { name: "Status", value: detail.status, inline: true }
+  ];
+
+  for (const spec of LAWYER_CORE_DETAIL_FIELDS) {
+    addLawyerPayloadDetailField(fields, includedPayloadKeys, payload, spec);
+  }
+
+  const representationType = lawyerPayloadText(payload.representationType);
+  for (const spec of LAWYER_ROUTE_DETAIL_FIELDS[representationType] ?? []) {
+    addLawyerPayloadDetailField(fields, includedPayloadKeys, payload, spec);
+  }
+
+  if (detail.requesterContact) {
+    fields.push({ name: "Requester Contact Record", value: detail.requesterContact, inline: true });
+  }
+  if (detail.documentUrl) {
+    fields.push({ name: "Document Link", value: detail.documentUrl, inline: false });
+  }
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (includedPayloadKeys.has(key)) continue;
+    const text = lawyerPayloadText(value);
+    if (!text) continue;
+    fields.push({ name: humanizeLawyerPayloadKey(key), value: text, inline: false });
+  }
+
+  return fields;
+}
+
+function addLawyerPayloadDetailField(
+  fields: LawyerDetailRawField[],
+  includedPayloadKeys: Set<string>,
+  payload: Record<string, unknown>,
+  spec: LawyerPayloadFieldSpec
+): void {
+  includedPayloadKeys.add(spec.key);
+  const value = lawyerPayloadText(payload[spec.key]);
+  if (!value) return;
+  fields.push({ name: spec.label, value, inline: spec.inline ?? false });
+}
+
+function splitLawyerDetailFields(rawFields: LawyerDetailRawField[]): DiscordEmbedField[] {
+  const fields: DiscordEmbedField[] = [];
+  for (const field of rawFields) {
+    const chunks = chunkLawyerFieldValue(field.value);
+    for (const [index, chunk] of chunks.entries()) {
+      fields.push({
+        name: chunks.length === 1 ? fitLawyerFieldName(field.name) : fitLawyerFieldName(`${field.name} ${index + 1}/${chunks.length}`),
+        value: chunk,
+        inline: field.inline && chunks.length === 1
+      });
+    }
+  }
+  return fields;
+}
+
+function chunkLawyerEmbedFields(fields: DiscordEmbedField[]): DiscordEmbedField[][] {
+  const chunks: DiscordEmbedField[][] = [];
+  let current: DiscordEmbedField[] = [];
+  for (const field of fields) {
+    if (current.length >= LAWYER_RESPONSE_DETAILS_MAX_FIELDS_PER_EMBED) {
+      chunks.push(current);
+      current = [];
+    }
+    current.push(field);
+  }
+  if (current.length) chunks.push(current);
+  return chunks.length ? chunks : [[{ name: "Details", value: "No submitted details were available.", inline: false }]];
+}
+
+function chunkLawyerFieldValue(value: string): string[] {
+  const normalized = normalizeLawyerFieldText(value);
+  if (!normalized) return ["Not provided"];
+  if (normalized.length <= LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE) return [normalized];
+  const chunks: string[] = [];
+  let remaining = normalized;
+  while (remaining.length > LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE) {
+    let end = remaining.lastIndexOf(" ", LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE);
+    if (end < Math.floor(LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE * 0.6)) end = LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE;
+    chunks.push(remaining.slice(0, end).trim());
+    remaining = remaining.slice(end).trim();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+function lawyerPayloadText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return normalizeLawyerFieldText(value);
+  if (Array.isArray(value)) return value.map((item) => lawyerPayloadText(item)).filter(Boolean).join(", ");
+  if (typeof value === "object") return normalizeLawyerFieldText(JSON.stringify(value));
+  return normalizeLawyerFieldText(String(value));
+}
+
+function lawyerRequesterText(detail: ServiceRequestDetail): string {
+  const parts = [detail.requesterDiscordUsername, detail.requesterDiscordId ? `Discord ID ${detail.requesterDiscordId}` : ""].filter(Boolean);
+  return parts.join(" / ") || "Unknown";
+}
+
+function lawyerRequestPortalUrl(env: Env, requestId: string): string | null {
+  const base = env.PUBLIC_APP_URL?.replace(/\/+$/, "");
+  if (!base) return null;
+  try {
+    return new URL(`/requests/${encodeURIComponent(requestId)}`, base).toString();
+  } catch {
+    return null;
+  }
+}
+
+function fitLawyerFieldName(value: string): string {
+  const normalized = normalizeLawyerFieldText(value) || "Details";
+  if (normalized.length <= LAWYER_RESPONSE_DETAILS_MAX_FIELD_NAME) return normalized;
+  return `${normalized.slice(0, LAWYER_RESPONSE_DETAILS_MAX_FIELD_NAME - 3).trimEnd()}...`;
+}
+
+function normalizeLawyerFieldText(value: string): string {
+  return value.replaceAll(/[\u0000-\u001f]+/g, " ").replaceAll(/\s+/g, " ").trim();
+}
+
+function humanizeLawyerPayloadKey(key: string): string {
+  return key.replaceAll(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase());
 }
 
 async function postPublicLawyerClaimNotice(env: Env, detail: ServiceRequestDetail, channelId: string) {
@@ -2027,6 +2311,33 @@ interface TicketTarget {
   channelId: string;
   channelName: string | null;
   requestType: ServiceRequestType | "BAR_EXAM_FOLLOWUP";
+}
+
+interface LawyerPayloadFieldSpec {
+  key: string;
+  label: string;
+  inline?: boolean;
+}
+
+interface LawyerDetailRawField {
+  name: string;
+  value: string;
+  inline?: boolean;
+}
+
+interface DiscordEmbedField {
+  name: string;
+  value: string;
+  inline?: boolean;
+}
+
+interface LawyerResponseDetailsEmbed {
+  title: string;
+  description?: string;
+  color: number;
+  fields: DiscordEmbedField[];
+  footer: { text: string };
+  timestamp: string;
 }
 
 type LawyerResponseEventType = (typeof LAWYER_RESPONSE_EVENT_TYPES)[number];
