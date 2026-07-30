@@ -872,7 +872,7 @@ function Docket() {
               </div>
               <h2 className="mt-4 text-2xl font-semibold">{entry.title}</h2>
               <p className="mt-2 text-muted">{entry.publicSummary}</p>
-              <p className="mt-3 text-sm text-muted">Proceeding: {entry.proceedingType.replaceAll("_", " ")} - Judge: {entry.judgeName ?? "Pending assignment"}</p>
+              <p className="mt-3 text-sm text-muted">Proceeding: {formatDocketLabel(entry.proceedingType)} - Judge: {entry.judgeName ?? "Pending assignment"}</p>
               {entry.linkedRequestNumber ? <p className="mt-2 text-sm text-gold">Linked request: {entry.linkedRequestNumber}</p> : null}
             </Link>
           ))}
@@ -896,7 +896,7 @@ function PublicDocketDetail() {
             <div className="flex flex-wrap gap-3">
               <Badge>{detail.status}</Badge>
               <Badge>{detail.caseType}</Badge>
-              <Badge>{detail.proceedingType.replaceAll("_", " ")}</Badge>
+              <Badge>{formatDocketLabel(detail.proceedingType)}</Badge>
             </div>
             <h2 className="mt-4 text-3xl font-semibold">{detail.title}</h2>
             <div className="mt-5 grid gap-3 text-sm text-muted md:grid-cols-2">
@@ -1794,6 +1794,16 @@ function serviceFieldOptions(field: ServiceField, values: ServiceFormValues, isL
   return field.options ?? [];
 }
 
+function serviceFieldPlaceholder(field: ServiceField, values: ServiceFormValues): string {
+  const dynamicValue = field.placeholderWhen?.values[stringFormValue(values, field.placeholderWhen.field)];
+  return dynamicValue ?? field.placeholder ?? "";
+}
+
+function serviceFieldHelp(field: ServiceField, values: ServiceFormValues): string | undefined {
+  const dynamicValue = field.helpWhen?.values[stringFormValue(values, field.helpWhen.field)];
+  return dynamicValue ?? field.help;
+}
+
 function lawyerRouteModalKeyForValues(values: ServiceFormValues): LawyerRouteModalKey | null {
   const representationType = stringFormValue(values, "representationType");
   const representationSubtype = stringFormValue(values, "representationSubtype");
@@ -2029,8 +2039,8 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
         title={config.title}
         description={
           isLawyerRequest
-            ? `Request numbers use ${config.prefix}-YYYY-0001 format. Only the short public summary may be posted publicly; detailed case information remains restricted to DOJ staff review.`
-            : `Request numbers use ${config.prefix}-YYYY-0001 format. Full submitted details go only to a private DOJ ticket-style channel.`
+            ? `Request numbers use ${config.prefix}-YYYY-0001 format. Public request posts show only a short summary. Private details are restricted to DOJ staff and authorized attorneys inside the private response space.`
+            : `Request numbers use ${config.prefix}-YYYY-0001 format. Full submitted details go only to a private DOJ review channel or private response space.`
         }
       />
       <Content>
@@ -2094,6 +2104,8 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
                   const options = serviceFieldOptions(field, formValues, isLawyerRequest);
                   const currentValue = formValues[field.name];
                   const textValue = typeof currentValue === "string" ? currentValue : "";
+                  const placeholder = serviceFieldPlaceholder(field, formValues);
+                  const help = serviceFieldHelp(field, formValues);
                   return (
                     <label key={field.name} className="grid gap-2 text-sm font-medium text-zinc-200">
                       {field.kind === "checkbox" ? (
@@ -2112,14 +2124,14 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
                       ) : (
                         <>
                           {field.label}
-                          {field.help ? <span className="text-xs leading-5 text-muted">{field.help}</span> : null}
+                          {help ? <span className="text-xs leading-5 text-muted">{help}</span> : null}
                           {field.kind === "textarea" ? (
                             <textarea
                               name={field.name}
                               required={required}
                               rows={4}
                               maxLength={field.maxLength}
-                              placeholder={field.placeholder}
+                              placeholder={placeholder}
                               value={textValue}
                               onChange={(event) => updateField(field.name, event.currentTarget.value)}
                               className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
@@ -2132,7 +2144,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
                               onChange={(event) => updateField(field.name, event.currentTarget.value)}
                               className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
                             >
-                              <option value="">Select</option>
+                              <option value="" disabled={required}>{placeholder || `Select ${field.label.toLowerCase()}`}</option>
                               {options.map((option) => <option key={option}>{option}</option>)}
                             </select>
                           ) : (
@@ -2141,7 +2153,7 @@ function ServiceForm({ me, loading: authLoading }: { me: CurrentUserResponse | n
                               required={required}
                               type={field.kind === "url" ? "url" : "text"}
                               maxLength={field.maxLength}
-                              placeholder={field.placeholder}
+                              placeholder={placeholder}
                               value={textValue}
                               onChange={(event) => updateField(field.name, event.currentTarget.value)}
                               className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold"
@@ -2787,7 +2799,7 @@ function DocketAdminDetail({ me, loading }: { me: CurrentUserResponse | null; lo
             <h2 className="mt-4 text-3xl font-semibold">{detail.title}</h2>
             <div className="mt-5 grid gap-3 text-sm text-muted md:grid-cols-2">
               <p>Case type: {detail.caseType}</p>
-              <p>Proceeding: {detail.proceedingType.replaceAll("_", " ")}</p>
+              <p>Proceeding: {formatDocketLabel(detail.proceedingType)}</p>
               <p>Judge: {detail.judgeName ?? "Pending assignment"}</p>
               <p>Scheduled: {detail.scheduledFor ? new Date(detail.scheduledFor).toLocaleString() : "Pending"}</p>
               <p>Discord message: {detail.discordMessageId ?? "Not posted"}</p>
@@ -3138,7 +3150,7 @@ function DocketRow({ entry, href }: { entry: { id: string; docketNumber: string;
         {entry.scheduledFor ? <span className="text-sm text-muted">{new Date(entry.scheduledFor).toLocaleString()}</span> : null}
       </div>
       <h3 className="mt-3 text-lg font-semibold">{entry.title}</h3>
-      <p className="text-sm text-muted">{entry.proceedingType.replaceAll("_", " ")}</p>
+      <p className="text-sm text-muted">{formatDocketLabel(entry.proceedingType)}</p>
     </Link>
   );
 }
@@ -3246,7 +3258,13 @@ function prefillFromRequest(detail: Awaited<ReturnType<typeof fetchAdminRequest>
     GENERAL: { caseType: "OTHER", proceedingType: "ADMINISTRATIVE_REVIEW" },
     LAWYER: { caseType: "OTHER", proceedingType: "TEMPORARY_DEFENSE_REPRESENTATION" }
   };
-  const suggestion = caseMap[detail.requestType] ?? caseMap.GENERAL;
+  const suggestion = { ...(caseMap[detail.requestType] ?? caseMap.GENERAL) };
+  const criminalRequestType = stringValue(payload, "criminalRequestType");
+  const isPreliminaryProbableCauseReview = detail.requestType === "CRIMINAL_TRIAL" && criminalRequestType === "Preliminary Probable Cause Review";
+  if (detail.requestType === "CRIMINAL_TRIAL") {
+    if (isPreliminaryProbableCauseReview) suggestion.proceedingType = "PROBABLE_CAUSE_REVIEW";
+    else if (criminalRequestType === "Criminal Case Status / Scheduling Question") suggestion.proceedingType = "ADMINISTRATIVE_REVIEW";
+  }
 
   let title = `${detail.shortTitle} / ${detail.requestNumber}`;
   let plaintiff =
@@ -3269,7 +3287,9 @@ function prefillFromRequest(detail: Awaited<ReturnType<typeof fetchAdminRequest>
 
   const summaryMarkdown = detail.requestType === "LAWYER"
     ? `Generated from lawyer request ${detail.requestNumber} for ${stringValue(payload, "characterFullName")}. Public summary: ${stringValue(payload, "publicSummary") || detail.shortTitle}. Urgency: ${stringValue(payload, "urgency")}.`
-    : `The Court has received ${detail.requestNumber} for judicial review. Public docket text should be finalized by the assigned judicial officer before publication.`;
+    : isPreliminaryProbableCauseReview
+      ? `Preliminary review entries are not trial notices. The Court is reviewing the filing, charges, and submitted evidence for ${detail.requestNumber} before the case moves forward.`
+      : `The Court has received ${detail.requestNumber} for judicial review. Public docket text should be finalized by the assigned judicial officer before publication.`;
   const publicNotesMarkdown = detail.requestType === "LAWYER" ? "Brief docket-safe note" : "";
   const privateNotesMarkdown = `Internal note referencing ${detail.requestNumber}`;
 
@@ -3353,6 +3373,7 @@ function docketSchedulePreview(form: DocketFormState): string {
 }
 
 function formatDocketLabel(value: string): string {
+  if (value === "PROBABLE_CAUSE_REVIEW") return "Preliminary Probable Cause Review";
   return value.replaceAll("_", " ");
 }
 
@@ -4930,9 +4951,9 @@ function BarExamStart({ me, loading }: { me: CurrentUserResponse | null; loading
                 ))}
               </select>
             </Field>
-            <Field label="In-city name"><input value={candidateName} onChange={(event) => setCandidateName(event.target.value)} className="field" /></Field>
-            <Field label="In-city phone"><input value={candidatePhone} onChange={(event) => setCandidatePhone(event.target.value)} className="field" /></Field>
-            <Field label="Optional contact email"><input type="email" value={candidateEmail} onChange={(event) => setCandidateEmail(event.target.value)} className="field" /></Field>
+            <Field label="In-city name"><input value={candidateName} onChange={(event) => setCandidateName(event.target.value)} placeholder="Elias Monroe" className="field" /></Field>
+            <Field label="In-city phone"><input value={candidatePhone} onChange={(event) => setCandidatePhone(event.target.value)} placeholder="555-0140 or Discord DM to eliasmonroe" className="field" /></Field>
+            <Field label="Optional contact email"><input type="email" value={candidateEmail} onChange={(event) => setCandidateEmail(event.target.value)} placeholder="elias.monroe@example.com" className="field" /></Field>
           </div>
           <label className="mt-6 flex gap-3 rounded-md border border-gold/30 bg-gold/10 p-4 text-sm text-gold">
             <input type="checkbox" checked={integrityAccepted} onChange={(event) => setIntegrityAccepted(event.target.checked)} />

@@ -2819,7 +2819,7 @@ function servicePayload(type: ServiceRequestType, name: string, summary: string,
   const templateConfirm = { confirmCopy: true, confirmRenamed: true, confirmEditorPermissions: true };
   switch (type) {
     case "CRIMINAL_TRIAL":
-      return { arrestReportNumber: "Discord request", defendantName: name, allegedCharges: summary, briefSummary: summary, schedulingNotes: urgency };
+      return { criminalRequestType: "Criminal Case Status / Scheduling Question", arrestReportNumber: "Discord request", defendantName: name, allegedCharges: summary, briefSummary: summary, schedulingNotes: urgency };
     case "CIVIL_CASE":
       return { ...templateConfirm, plaintiffFullName: name, defendantName: "Pending", complaintType: "Discord civil case", documentUrl, filingSummary: summary };
     case "SUBPOENA":

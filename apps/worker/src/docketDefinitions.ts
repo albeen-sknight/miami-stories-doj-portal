@@ -33,7 +33,7 @@ export const CASE_TYPE_LABELS: Record<DocketCaseType, string> = {
 };
 
 export const PROCEEDING_LABELS: Record<DocketProceedingType, string> = {
-  PROBABLE_CAUSE_REVIEW: "Probable Cause Review",
+  PROBABLE_CAUSE_REVIEW: "Preliminary Probable Cause Review",
   CUSTODY_ADVISORY: "Custody Advisory",
   ARRAIGNMENT: "Arraignment",
   PRELIMINARY_HEARING: "Preliminary Hearing",
@@ -68,12 +68,20 @@ export const REQUEST_DOCKET_SUGGESTIONS: Record<ServiceRequestType, { caseType: 
 };
 
 export function docketSuggestionFromRequest(detail: ServiceRequestDetail) {
-  const suggestion = REQUEST_DOCKET_SUGGESTIONS[detail.requestType];
+  const suggestion = { ...REQUEST_DOCKET_SUGGESTIONS[detail.requestType] };
   const payload = detail.payload;
+  const criminalRequestType = readString(payload, "criminalRequestType");
+  const isPreliminaryProbableCauseReview = detail.requestType === "CRIMINAL_TRIAL" && criminalRequestType === "Preliminary Probable Cause Review";
+  if (detail.requestType === "CRIMINAL_TRIAL") {
+    if (isPreliminaryProbableCauseReview) suggestion.proceedingType = "PROBABLE_CAUSE_REVIEW";
+    else if (criminalRequestType === "Criminal Case Status / Scheduling Question") suggestion.proceedingType = "ADMINISTRATIVE_REVIEW";
+  }
   const plaintiff = readString(payload, "plaintiffFullName") || readString(payload, "submittingParty") || readString(payload, "applicantFullName") || readString(payload, "petitionerName") || null;
   const defendant = readString(payload, "defendantName") || readString(payload, "respondentName") || readString(payload, "target") || null;
   const titleParts = [detail.shortTitle, detail.requestNumber].filter(Boolean);
-  const publicSummary = `The Court has received ${detail.requestNumber} for judicial review. Public docket text should be finalized by the assigned judicial officer before publication.`;
+  const publicSummary = isPreliminaryProbableCauseReview
+    ? `Preliminary review entries are not trial notices. The Court is reviewing the filing, charges, and submitted evidence for ${detail.requestNumber} before the case moves forward.`
+    : `The Court has received ${detail.requestNumber} for judicial review. Public docket text should be finalized by the assigned judicial officer before publication.`;
   return {
     ...suggestion,
     title: titleParts.join(" / "),

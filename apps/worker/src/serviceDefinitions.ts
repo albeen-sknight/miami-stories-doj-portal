@@ -39,11 +39,11 @@ export const SERVICE_DEFINITIONS: Record<ServiceRequestType, ServiceDefinition> 
   CRIMINAL_TRIAL: {
     type: "CRIMINAL_TRIAL",
     prefix: "CRT",
-    label: "Court Hearing Request",
+    label: "Criminal Court Request",
     publicChannelKey: "REQUEST_CRIMINAL_TRIAL",
     categoryKey: "CRIMINAL_TRIALS_CATEGORY",
     discordWorkflow: "PRIVATE_TICKET",
-    requiredFields: ["arrestReportNumber", "defendantName", "allegedCharges", "briefSummary"],
+    requiredFields: ["criminalRequestType", "arrestReportNumber", "defendantName", "allegedCharges", "briefSummary"],
     mainPartyField: "defendantName",
     shortTitleFields: ["defendantName", "arrestReportNumber"]
   },

@@ -53,6 +53,12 @@ select {
   color-scheme: dark;
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: rgba(212, 218, 229, 0.58);
+  opacity: 1;
+}
+
 a,
 button,
 input,

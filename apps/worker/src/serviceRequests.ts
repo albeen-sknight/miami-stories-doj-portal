@@ -913,7 +913,7 @@ async function pdHighCommandAutoAccessRoleId(env: Env, ctx: AuthContext, detail:
 }
 
 async function recordPdHighCommandAutoAccess(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, channelId: string, roleId: string): Promise<void> {
-  const message = "PD High Command access was automatically added to this criminal trial ticket because the requester has the PD High Command role.";
+  const message = "PD High Command access was automatically added to this criminal court ticket because the requester has the PD High Command role.";
   try {
     const response = await discordApi(env, `/channels/${channelId}/messages`, {
       method: "POST",

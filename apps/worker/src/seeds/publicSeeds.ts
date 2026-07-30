@@ -43,10 +43,10 @@ export const faqSeed: FaqEntry[] = [
   },
   {
     id: "faq-criminal-trials",
-    category: "Arrests, Pleas, and Criminal Trials",
-    question: "How are criminal trial requests started?",
+    category: "Arrests, Pleas, and Criminal Court Requests",
+    question: "How are criminal court requests started?",
     answerMarkdown:
-      "Criminal trial requests should include the defendant, Citizen ID, arrest report number, alleged charges, arresting agency or officer, discovery notes, and scheduling notes.",
+      "Criminal court requests should identify whether the request is for Preliminary Probable Cause Review, Trial / Court Hearing Request, or a case status/scheduling question. Preliminary review entries are not trial notices; they show the Court is reviewing the filing, charges, and submitted evidence before the case moves forward.",
     sortOrder: 6
   },
   {
@@ -86,7 +86,7 @@ export const faqSeed: FaqEntry[] = [
     category: "Expungements, Marriage, and Other Services",
     question: "What public services are available?",
     answerMarkdown:
-      "The portal supports request forms for defense counsel, court hearings, civil claims, subpoenas, warrants, expungements, marriage certificate reviews, divorce reviews, administrative review, and Bar Examination access.",
+      "The portal supports request forms for defense counsel, criminal court requests, civil claims, subpoenas, warrants, expungements, marriage certificate reviews, divorce reviews, administrative review, and Bar Examination access.",
     sortOrder: 11
   },
   {

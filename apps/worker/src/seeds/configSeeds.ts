@@ -34,7 +34,7 @@ export const discordChannelMappingsSeed = [
   ["DOJ_DOCKET", "", "Public docket publishing channel"],
   ["JUDICIAL_RECORDS", "", "Public judicial records publishing channel"],
   ["REQUEST_LAWYER", "", "Lawyer request intake"],
-  ["REQUEST_CRIMINAL_TRIAL", "", "Criminal trial request intake"],
+  ["REQUEST_CRIMINAL_TRIAL", "", "Criminal court request intake"],
   ["REQUEST_CIVIL_CASE", "", "Civil case request intake"],
   ["REQUEST_SUBPOENA", "", "Subpoena request intake"],
   ["REQUEST_WARRANT", "", "Warrant request intake"],
@@ -46,7 +46,7 @@ export const discordChannelMappingsSeed = [
 ] as const;
 
 export const discordCategoryMappingsSeed = [
-  ["CRIMINAL_TRIALS_CATEGORY", "", "Private ticket parent category for criminal trial requests"],
+  ["CRIMINAL_TRIALS_CATEGORY", "", "Private ticket parent category for criminal court requests"],
   ["CIVIL_CASES_CATEGORY", "", "Private ticket parent category for civil case requests"],
   ["SUBPOENAS_CATEGORY", "", "Private ticket parent category for subpoena requests"],
   ["WARRANTS_CATEGORY", "", "Private ticket parent category for arrest and search/seizure warrant requests"],
