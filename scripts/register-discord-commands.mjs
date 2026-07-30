@@ -15,6 +15,9 @@ const missingEnv = [
 
 if (missingEnv.length) {
   console.error(`Missing required Discord env value(s): ${missingEnv.join(", ")}.`);
+  if (missingEnv.includes("DISCORD_BOT_TOKEN")) {
+    console.error('Run from the repo root with: $env:DISCORD_BOT_TOKEN="REAL_TOKEN"; node scripts/register-discord-commands.mjs');
+  }
   process.exit(1);
 }
 
@@ -336,6 +339,7 @@ if (!response.ok) {
 
 const registered = JSON.parse(body);
 console.log(`Registered ${registered.length} guild slash commands for guild ${guildId}.`);
+console.log(`Command names: ${registered.map((command) => command.name).sort().join(", ")}`);
 
 function stringOption(name, description, required) {
   return { type: 3, name, description, required };

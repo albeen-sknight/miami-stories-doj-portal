@@ -791,6 +791,7 @@ async function createDocketFromDiscord(env: Env, ctx: AuthContext, options: Map<
   const docketNumber = await nextDocketNumber(env, caseType);
   const summary = stringOption(options, "summary") || "Docket entry created from Discord slash command.";
   const isPublic = Boolean(options.get("publish"));
+  const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO docket_entries (
       id, docket_number, case_id, title, entry_type, case_type, proceeding_type, plaintiff, defendant,
@@ -810,7 +811,7 @@ async function createDocketFromDiscord(env: Env, ctx: AuthContext, options: Map<
     ctx.user.id,
     ctx.user.displayName,
     status,
-    new Date().toISOString().slice(0, 10),
+    now.slice(0, 10),
     scheduledAt || null,
     summary,
     summary,
@@ -820,7 +821,7 @@ async function createDocketFromDiscord(env: Env, ctx: AuthContext, options: Map<
     linkedRequest?.documentUrl ?? null,
     isPublic ? 1 : 0,
     isPublic ? "PUBLIC" : "PRIVATE",
-    isPublic ? new Date().toISOString() : null,
+    now,
     JSON.stringify({ source: "discord_slash_command", channel_id: options.get("_channel_id") ?? null })
   ).run();
   await audit(env, "DOCKET_CREATED_FROM_DISCORD", { docket_id: id, docket_number: docketNumber }, ctx.user.id);
@@ -3197,14 +3198,26 @@ async function recordDiscordAdminAction(
   logKind: DiscordLogKind
 ): Promise<void> {
   if (env.DB) {
-    await env.DB.prepare(
-      `INSERT INTO discord_admin_actions
-        (id, guild_id, actor_user_id, action_type, target_type, target_id, summary, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(crypto.randomUUID(), env.DISCORD_GUILD_ID ?? "", ctx.user.id, actionType, targetType, targetId, summary, JSON.stringify(metadata)).run();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO discord_admin_actions
+          (id, guild_id, actor_user_id, action_type, target_type, target_id, summary, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(crypto.randomUUID(), env.DISCORD_GUILD_ID ?? "", ctx.user.id, actionType, targetType, targetId, summary, JSON.stringify(metadata)).run();
+    } catch (cause) {
+      console.warn(JSON.stringify({ event: "discord_admin_action_record_failed", actionType, targetType, targetId, cause: safeError(cause) }));
+    }
   }
-  await audit(env, `DISCORD_${actionType}`, auditSafeMetadata({ target_type: targetType, target_id: targetId, summary, ...metadata }), ctx.user.id);
-  await postDiscordLog(env, logKind, `**${actionType}** by ${ctx.user.displayName} (${ctx.user.discordId})\n${summary}`);
+  try {
+    await audit(env, `DISCORD_${actionType}`, auditSafeMetadata({ target_type: targetType, target_id: targetId, summary, ...metadata }), ctx.user.id);
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "discord_admin_action_audit_failed", actionType, targetType, targetId, cause: safeError(cause) }));
+  }
+  try {
+    await postDiscordLog(env, logKind, `**${actionType}** by ${ctx.user.displayName} (${ctx.user.discordId})\n${summary}`);
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "discord_admin_action_log_post_failed", actionType, targetType, targetId, cause: safeError(cause) }));
+  }
 }
 
 async function postDiscordLog(env: Env, kind: DiscordLogKind, content: string): Promise<void> {
