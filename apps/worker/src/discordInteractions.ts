@@ -15,14 +15,15 @@ import type {
   DocketStatus,
   LogicalPermission,
   ServiceRequestDetail,
+  ServiceRequestStatus,
   ServiceRequestType
 } from "@shotta-doj/shared";
 import { BAR_EXAM_ATTEMPT_STATUSES, DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, DOCKET_STATUSES } from "@shotta-doj/shared";
 import { audit } from "./audit";
 import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, getServiceRequestDetailByTicketChannel, addServiceRequestEvent, closeServiceRequestTicketForContext, latestServiceRequestTicketClaim } from "./serviceRequests";
-import { postLawyerSticky } from "./serviceDiscord";
+import { postLawyerSticky, postServiceRequestEmbedToPrivateTicket } from "./serviceDiscord";
 import { discordApi, fetchBotUser, fetchGuildMember, requireEnv } from "./discord";
-import { CASE_TYPE_PREFIX } from "./docketDefinitions";
+import { CASE_TYPE_PREFIX, docketSuggestionFromRequest } from "./docketDefinitions";
 import { errorJson } from "./http";
 import { deriveActionPermissions, hasActionPermission, PermissionError, requireAnyPermission, requirePermission } from "./permissions";
 import { serviceDefinition } from "./serviceDefinitions";
@@ -46,6 +47,7 @@ const PRIVATE_THREAD = 12;
 const TICKET_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_REQUESTS", "ADMIN"];
 const LAWYER_RESPONSE_EVENT_TYPES = ["LAWYER_RESPONSE_CLAIMED", "LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF"] as const;
 const LAWYER_RESPONSE_OPENING_POSTED_EVENT = "LAWYER_RESPONSE_OPENING_POSTED";
+const LAWYER_RESPONSE_PANEL_POSTED_EVENT = "LAWYER_RESPONSE_PANEL_POSTED";
 const LAWYER_RESPONSE_DETAILS_POSTED_EVENT = "LAWYER_RESPONSE_DETAILS_POSTED";
 const LAWYER_RESPONSE_MESSAGE_POST_FAILED_EVENT = "LAWYER_RESPONSE_MESSAGE_POST_FAILED";
 const LAWYER_RESPONSE_DETAILS_NOTE = "These details are posted only inside this private attorney response space. Do not repost them publicly.";
@@ -53,6 +55,7 @@ const LAWYER_RESPONSE_DETAILS_MAX_EMBEDS = 8;
 const LAWYER_RESPONSE_DETAILS_MAX_FIELD_NAME = 256;
 const LAWYER_RESPONSE_DETAILS_MAX_FIELD_VALUE = 1000;
 const LAWYER_RESPONSE_DETAILS_MAX_FIELDS_PER_EMBED = 4;
+const REQUEST_PANEL_STATUS_OPTIONS: ServiceRequestStatus[] = ["RECEIVED", "UNDER_REVIEW", "NEEDS_INFO", "CLOSED"];
 const LAWYER_RESPONSE_PERMISSIONS: LogicalPermission[] = [
   "BAR_ACTIVE",
   "PUBLIC_DEFENDER_CERTIFIED",
@@ -122,7 +125,7 @@ const LAWYER_ROUTE_DETAIL_FIELDS: Record<string, LawyerPayloadFieldSpec[]> = {
   ]
 };
 
-type InteractionType = 1 | 2 | 3;
+type InteractionType = 1 | 2 | 3 | 5;
 type OptionValue = string | number | boolean;
 
 interface DiscordInteraction {
@@ -140,6 +143,8 @@ interface DiscordInteraction {
   data?: {
     name?: string;
     custom_id?: string;
+    values?: string[];
+    components?: DiscordComponent[];
     options?: Array<{ name: string; type: number; value?: OptionValue; options?: Array<{ name: string; type: number; value?: OptionValue }> }>;
   };
   message?: {
@@ -156,18 +161,32 @@ interface DiscordInteractionUser {
 }
 
 interface DiscordInteractionResponse {
-  type: 1 | 4 | 5 | 6 | 7;
+  type: 1 | 4 | 5 | 6 | 7 | 9;
   data?: {
     content?: string;
     flags?: number;
     components?: DiscordComponent[];
     allowed_mentions?: { parse?: string[]; users?: string[]; roles?: string[] };
+    custom_id?: string;
+    title?: string;
   };
 }
 
 interface DiscordComponent {
   type: number;
-  components?: Array<{ type: number; style: number; label: string; custom_id?: string; url?: string }>;
+  style?: number;
+  label?: string;
+  custom_id?: string;
+  value?: string;
+  url?: string;
+  placeholder?: string;
+  min_values?: number;
+  max_values?: number;
+  required?: boolean;
+  min_length?: number;
+  max_length?: number;
+  options?: Array<{ label: string; value: string; description?: string }>;
+  components?: DiscordComponent[];
 }
 
 export async function discordInteractions(request: Request, env: Env, executionCtx?: ExecutionContext): Promise<Response> {
@@ -185,6 +204,7 @@ export async function discordInteractions(request: Request, env: Env, executionC
     actorDiscordId = interaction.member?.user?.id ?? interaction.user?.id ?? null;
     if (interaction.type === 1) return loggedInteractionResponse(interaction, { type: 1 }, null);
     if (interaction.type === 3) return handleComponentInteraction(env, interaction, executionCtx);
+    if (interaction.type === 5) return handleModalSubmitInteraction(env, interaction, executionCtx);
     if (interaction.type !== 2 || !interaction.data?.name) {
       return loggedInteractionResponse(interaction, messageResponse("Unsupported Discord interaction.", true), null);
     }
@@ -253,6 +273,12 @@ function handleComponentInteraction(env: Env, interaction: DiscordInteraction, e
   if (customId.startsWith("lawyer_response:")) {
     return handleLawyerResponseComponent(env, interaction, executionCtx);
   }
+  if (customId.startsWith("req:")) {
+    return handleRequestPanelComponent(env, interaction, executionCtx);
+  }
+  if (customId.startsWith("law:")) {
+    return handleLawyerPanelComponent(env, interaction, executionCtx);
+  }
   if (customId.startsWith("ticket_action:")) {
     return handleTicketActionComponent(env, interaction, executionCtx);
   }
@@ -309,6 +335,57 @@ function handleLawyerResponseComponent(env: Env, interaction: DiscordInteraction
   return interactionJson(response);
 }
 
+function handleRequestPanelComponent(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
+  const parsed = parsePanelCustomId(interaction.data?.custom_id ?? "", "req");
+  if (!parsed) return loggedInteractionResponse(interaction, messageResponse("Unsupported request panel action.", true), null);
+  if (["addUser", "addRole", "createDocket", "close"].includes(parsed.action)) {
+    const modal = requestPanelModal(parsed.action, parsed.requestId);
+    return loggedInteractionResponse(interaction, modal ?? messageResponse("Unsupported request panel modal.", true), null);
+  }
+  const response = deferredResponse(true);
+  logInteraction(interaction, response, null);
+  const work = processRequestPanelComponent(env, interaction, parsed);
+  if (executionCtx) {
+    executionCtx.waitUntil(work);
+    return interactionJson(response);
+  }
+  void work;
+  return interactionJson(response);
+}
+
+function handleLawyerPanelComponent(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
+  const parsed = parsePanelCustomId(interaction.data?.custom_id ?? "", "law");
+  if (!parsed) return loggedInteractionResponse(interaction, messageResponse("Unsupported lawyer panel action.", true), null);
+  if (["addCounsel", "addOversight", "addJudge", "close"].includes(parsed.action)) {
+    const modal = lawyerPanelModal(parsed.action, parsed.requestId);
+    return loggedInteractionResponse(interaction, modal ?? messageResponse("Unsupported lawyer panel modal.", true), null);
+  }
+  const response = deferredResponse(true);
+  logInteraction(interaction, response, null);
+  const work = processLawyerPanelComponent(env, interaction, parsed);
+  if (executionCtx) {
+    executionCtx.waitUntil(work);
+    return interactionJson(response);
+  }
+  void work;
+  return interactionJson(response);
+}
+
+function handleModalSubmitInteraction(env: Env, interaction: DiscordInteraction, executionCtx?: ExecutionContext): Response {
+  const customId = interaction.data?.custom_id ?? "";
+  const parsed = parsePanelModalCustomId(customId);
+  if (!parsed) return loggedInteractionResponse(interaction, messageResponse("Unsupported DOJ modal action.", true), null);
+  const response = deferredResponse(true);
+  logInteraction(interaction, response, null);
+  const work = processPanelModalSubmit(env, interaction, parsed);
+  if (executionCtx) {
+    executionCtx.waitUntil(work);
+    return interactionJson(response);
+  }
+  void work;
+  return interactionJson(response);
+}
+
 async function processLawyerResponseComponent(env: Env, interaction: DiscordInteraction, requestId: string) {
   try {
     const ctx = await authContextFromInteraction(env, interaction);
@@ -342,6 +419,145 @@ async function processTicketActionComponent(env: Env, interaction: DiscordIntera
       ? messageResponse("You do not have permission to use this ticket action.", true)
       : messageResponse(`Ticket action failed: ${safeError(cause)}`, true);
     await editOriginalInteractionResponse(env, interaction, response);
+  }
+}
+
+async function processRequestPanelComponent(env: Env, interaction: DiscordInteraction, parsed: PanelCustomId) {
+  try {
+    const ctx = await authContextFromInteraction(env, interaction);
+    const detail = await requestPanelDetail(env, interaction, parsed.requestId);
+    if (!detail) {
+      await editOriginalInteractionResponse(env, interaction, messageResponse("This panel is no longer linked to a live private DOJ request ticket.", true));
+      return;
+    }
+    if (parsed.action === "status") {
+      const status = normalizeRequestPanelStatus(interaction.data?.values?.[0] ?? "");
+      if (!status) {
+        await editOriginalInteractionResponse(env, interaction, messageResponse("That status is not supported from Discord.", true));
+        return;
+      }
+      await updateRequestStatusFromPanel(env, ctx, detail, status, {
+        channelId: detail.discordTicketChannelId ?? "",
+        eventType: "REQUEST_STATUS_UPDATED",
+        auditType: "SERVICE_REQUEST_STATUS_UPDATED_FROM_DISCORD_PANEL"
+      });
+      await editOriginalInteractionResponse(env, interaction, messageResponse(`Status updated to **${status}** for **${detail.requestNumber}**.`, true));
+      return;
+    }
+    if (parsed.action === "claim") {
+      const response = await claimOrUnclaimRequestFromPanel(env, ctx, detail);
+      await editOriginalInteractionResponse(env, interaction, response);
+      return;
+    }
+    if (parsed.action === "transcript") {
+      requireRequestPanelChannelAction(ctx, detail);
+      const response = await transcriptTicketForDetail(env, ctx, detail, "request-panel-transcript");
+      await editOriginalInteractionResponse(env, interaction, response);
+      return;
+    }
+    await editOriginalInteractionResponse(env, interaction, messageResponse("Unsupported request panel action.", true));
+  } catch (cause) {
+    const response = cause instanceof PermissionError || (cause instanceof Error && cause.name === "PermissionError")
+      ? messageResponse("You do not have permission to use this request panel action.", true)
+      : messageResponse(`Request panel action failed: ${safeError(cause)}`, true);
+    await editOriginalInteractionResponse(env, interaction, response);
+  }
+}
+
+async function processLawyerPanelComponent(env: Env, interaction: DiscordInteraction, parsed: PanelCustomId) {
+  try {
+    const ctx = await authContextFromInteraction(env, interaction);
+    const linked = await linkedLawyerResponseSpace(env, interaction.channel_id);
+    if (!linked || linked.detail.id !== parsed.requestId) {
+      await editOriginalInteractionResponse(env, interaction, messageResponse("This lawyer panel is no longer linked to this private attorney response space.", true));
+      return;
+    }
+    if (parsed.action === "status") {
+      const status = normalizeRequestPanelStatus(interaction.data?.values?.[0] ?? "");
+      if (!status) {
+        await editOriginalInteractionResponse(env, interaction, messageResponse("That lawyer request status is not supported from Discord.", true));
+        return;
+      }
+      requireLawyerPanelAction(ctx, linked.detail, linked.space);
+      await updateRequestStatusFromPanel(env, ctx, linked.detail, status, {
+        channelId: lawyerResponseSpaceChannelId(linked.space),
+        eventType: "LAWYER_STATUS_UPDATED",
+        auditType: "LAWYER_STATUS_UPDATED_FROM_DISCORD_PANEL",
+        skipPrivateEmbedRefresh: true,
+        skipPermissionCheck: true
+      });
+      await editOriginalInteractionResponse(env, interaction, messageResponse(`Lawyer request status updated to **${status}** for **${linked.detail.requestNumber}**.`, true));
+      return;
+    }
+    await editOriginalInteractionResponse(env, interaction, messageResponse("Unsupported lawyer panel action.", true));
+  } catch (cause) {
+    const response = cause instanceof PermissionError || (cause instanceof Error && cause.name === "PermissionError")
+      ? messageResponse("You do not have permission to use this lawyer panel action.", true)
+      : messageResponse(`Lawyer panel action failed: ${safeError(cause)}`, true);
+    await editOriginalInteractionResponse(env, interaction, response);
+  }
+}
+
+async function processPanelModalSubmit(env: Env, interaction: DiscordInteraction, parsed: PanelModalCustomId) {
+  try {
+    const ctx = await authContextFromInteraction(env, interaction);
+    const values = modalValueMap(interaction);
+    const response = parsed.scope === "req"
+      ? await processRequestPanelModal(env, ctx, interaction, parsed, values)
+      : await processLawyerPanelModal(env, ctx, interaction, parsed, values);
+    await editOriginalInteractionResponse(env, interaction, response);
+  } catch (cause) {
+    const response = cause instanceof PermissionError || (cause instanceof Error && cause.name === "PermissionError")
+      ? messageResponse("You do not have permission to submit this DOJ panel action.", true)
+      : messageResponse(`Panel modal action failed: ${safeError(cause)}`, true);
+    await editOriginalInteractionResponse(env, interaction, response);
+  }
+}
+
+async function processRequestPanelModal(env: Env, ctx: AuthContext, interaction: DiscordInteraction, parsed: PanelModalCustomId, values: Map<string, string>): Promise<DiscordInteractionResponse> {
+  const detail = await requestPanelDetail(env, interaction, parsed.requestId);
+  if (!detail) return messageResponse("This panel is no longer linked to a live private DOJ request ticket.", true);
+  switch (parsed.action) {
+    case "addUser": {
+      const userId = extractDiscordId(values.get("user") ?? "");
+      if (!userId) return messageResponse("Enter a valid Discord user ID or @mention.", true);
+      return addUserToPrivateRequestTicketFromPanel(env, ctx, detail, userId, values.get("reason") ?? "");
+    }
+    case "addRole": {
+      const roleId = extractDiscordId(values.get("role") ?? "");
+      if (!roleId) return messageResponse("Enter a valid Discord role ID or @role mention.", true);
+      return addRoleToPrivateRequestTicketFromPanel(env, ctx, detail, roleId, values.get("reason") ?? "");
+    }
+    case "createDocket":
+      return createDocketFromRequestPanel(env, ctx, detail, values);
+    case "close":
+      return closeRequestFromPanel(env, ctx, detail, values.get("reason") ?? "");
+    default:
+      return messageResponse("Unsupported request panel modal.", true);
+  }
+}
+
+async function processLawyerPanelModal(env: Env, ctx: AuthContext, interaction: DiscordInteraction, parsed: PanelModalCustomId, values: Map<string, string>): Promise<DiscordInteractionResponse> {
+  const linked = await linkedLawyerResponseSpace(env, interaction.channel_id);
+  if (!linked || linked.detail.id !== parsed.requestId) return messageResponse("This lawyer panel is no longer linked to this private attorney response space.", true);
+  switch (parsed.action) {
+    case "addCounsel":
+    case "addOversight":
+    case "addJudge": {
+      requireLawyerPanelAction(ctx, linked.detail, linked.space);
+      const userId = extractDiscordId(values.get("user") ?? "");
+      if (!userId) return messageResponse("Enter a valid Discord user ID or @mention.", true);
+      const added = await addUserToLawyerResponseSpace(env, ctx, linked.detail, linked.space, userId, {
+        reason: values.get("reason") ?? "",
+        purpose: parsed.action,
+        actorCanOverrideParticipantGate: canOverrideLawyerParticipantGate(ctx)
+      });
+      return messageResponse(added.message, true);
+    }
+    case "close":
+      return closeLawyerRequestFromPanel(env, ctx, linked.detail, linked.space, values.get("reason") ?? "");
+    default:
+      return messageResponse("Unsupported lawyer panel modal.", true);
   }
 }
 
@@ -666,6 +882,214 @@ async function deleteTicket(env: Env, ctx: AuthContext, interaction: DiscordInte
     { commandName: "delete-ticket", sourceType: target.sourceType, sourceId: target.sourceId, channelId: target.channelId }
   ));
   return messageResponse(`Ticket channel deleted after transcript **${transcript.id}** was stored. The portal record was not deleted.`, true);
+}
+
+async function requestPanelDetail(env: Env, interaction: DiscordInteraction, requestId: string): Promise<ServiceRequestDetail | null> {
+  const detail = await getServiceRequestDetail(env, requestId);
+  if (!detail?.discordTicketChannelId || detail.discordTicketDeletedAt) return null;
+  if (interaction.channel_id && detail.discordTicketChannelId !== interaction.channel_id) return null;
+  return detail;
+}
+
+async function updateRequestStatusFromPanel(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  status: ServiceRequestStatus,
+  options: { channelId: string; eventType: string; auditType: string; skipPrivateEmbedRefresh?: boolean; skipPermissionCheck?: boolean }
+): Promise<ServiceRequestDetail> {
+  if (!options.skipPermissionCheck) requireRequestPanelStatusAction(ctx, detail);
+  if (!env.DB) throw new Error("D1 is required for request status updates.");
+  await env.DB.prepare("UPDATE service_requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(status, detail.id)
+    .run();
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, options.eventType, `Status updated to ${status} from Discord request panel.`, {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    status,
+    channelId: options.channelId,
+    actorDiscordId: ctx.user.discordId
+  });
+  await audit(env, options.auditType, { request_id: detail.id, request_number: detail.requestNumber, status, channel_id: options.channelId }, ctx.user.id);
+  if (validDiscordId(options.channelId)) {
+    await postTicketMessage(env, options.channelId, `Status updated to **${status}** by ${ctx.user.displayName}.`, {});
+  }
+  const refreshed = await getServiceRequestDetail(env, detail.id) ?? { ...detail, status };
+  if (!options.skipPrivateEmbedRefresh) await refreshPrivateTicketPanel(env, refreshed);
+  return refreshed;
+}
+
+async function refreshPrivateTicketPanel(env: Env, detail: ServiceRequestDetail): Promise<void> {
+  if (!detail.discordTicketChannelId || !detail.discordTicketMessageId) return;
+  await postServiceRequestEmbedToPrivateTicket(env, detail, detail.discordTicketChannelId, { userIds: [], roleIds: [] }).catch((cause) => {
+    console.warn(JSON.stringify({
+      event: "request_action_panel_refresh_failed",
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      cause: safeError(cause)
+    }));
+  });
+}
+
+async function claimOrUnclaimRequestFromPanel(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<DiscordInteractionResponse> {
+  requireRequestPanelAction(ctx, detail);
+  const current = await latestServiceRequestTicketClaim(env, detail.id);
+  if (current && (current.actorUserId === ctx.user.id || current.staffDiscordId === ctx.user.discordId)) {
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "REQUEST_UNCLAIMED", "Request claim cleared from Discord action panel.", {
+      channel_id: detail.discordTicketChannelId,
+      staffDiscordId: ctx.user.discordId,
+      staffDisplayName: ctx.user.displayName,
+      previousStaffDiscordId: current.staffDiscordId,
+      previousStaffDisplayName: current.staffDisplayName
+    });
+    if (detail.discordTicketChannelId) await postTicketMessage(env, detail.discordTicketChannelId, `Request unclaimed by ${ctx.user.displayName}.`, {});
+    await audit(env, "SERVICE_REQUEST_UNCLAIMED_FROM_DISCORD_PANEL", { request_id: detail.id, channel_id: detail.discordTicketChannelId }, ctx.user.id);
+    return messageResponse(`Request unclaimed for **${detail.requestNumber}**.`, true);
+  }
+  return claimTicketForDetail(env, ctx, detail, "", "request-panel-claim");
+}
+
+async function addUserToPrivateRequestTicketFromPanel(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, userId: string, reason: string): Promise<DiscordInteractionResponse> {
+  requireRequestPanelAccessAction(ctx, detail);
+  if (!detail.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const allow = await ticketAccessAllow(env, detail.discordTicketChannelId);
+  await putTicketPermissionOverwrite(env, detail.discordTicketChannelId, userId, 1, allow);
+  await postTicketMessage(env, detail.discordTicketChannelId, withReason(`Added <@${userId}> to this ticket from the action panel.`, reason), { users: [userId] });
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "REQUEST_PERSON_ADDED", "Discord user added to private ticket from action panel.", {
+    channel_id: detail.discordTicketChannelId,
+    discord_user_id: userId,
+    reason: reason || null,
+    allow_permissions: allow.toString()
+  });
+  await audit(env, "SERVICE_REQUEST_PERSON_ADDED_FROM_DISCORD_PANEL", { request_id: detail.id, channel_id: detail.discordTicketChannelId, discord_user_id: userId, reason: reason || null }, ctx.user.id);
+  return messageResponse(`Added user to **${detail.requestNumber}**.`, true);
+}
+
+async function addRoleToPrivateRequestTicketFromPanel(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, roleId: string, reason: string): Promise<DiscordInteractionResponse> {
+  requireRequestPanelAccessAction(ctx, detail);
+  if (!detail.discordTicketChannelId) return linkedTicketOnlyResponse();
+  const allow = await ticketAccessAllow(env, detail.discordTicketChannelId);
+  await putTicketPermissionOverwrite(env, detail.discordTicketChannelId, roleId, 0, allow);
+  await postTicketMessage(env, detail.discordTicketChannelId, withReason(`Added role <@&${roleId}> to this ticket from the action panel.`, reason), {});
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "REQUEST_ROLE_ADDED", "Discord role added to private ticket from action panel.", {
+    channel_id: detail.discordTicketChannelId,
+    discord_role_id: roleId,
+    reason: reason || null,
+    allow_permissions: allow.toString()
+  });
+  await audit(env, "SERVICE_REQUEST_ROLE_ADDED_FROM_DISCORD_PANEL", { request_id: detail.id, channel_id: detail.discordTicketChannelId, discord_role_id: roleId, reason: reason || null }, ctx.user.id);
+  return messageResponse(`Added role to **${detail.requestNumber}**.`, true);
+}
+
+async function closeRequestFromPanel(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, reason: string): Promise<DiscordInteractionResponse> {
+  requireRequestPanelAction(ctx, detail);
+  const cleanedReason = reason.trim() || "Closed from Discord request action panel.";
+  const result = await closeServiceRequestTicketForContext(env, ctx, detail.id, cleanedReason, "discord", { commandName: "request-panel-close" });
+  return messageResponse([
+    `Request closed for **${result.detail.requestNumber}**.`,
+    result.close.transcriptId ? `Transcript: **${result.close.transcriptId}**` : null,
+    result.close.archiveChannelId ? `Archive: <#${result.close.archiveChannelId}>` : null,
+    result.close.deletedChannel ? "Private Discord ticket channel deleted." : "No private Discord channel was deleted."
+  ].filter(Boolean).join("\n"), true);
+}
+
+async function closeLawyerRequestFromPanel(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace, reason: string): Promise<DiscordInteractionResponse> {
+  requireLawyerPanelAction(ctx, detail, space);
+  const channelId = lawyerResponseSpaceChannelId(space);
+  const cleanedReason = reason.trim() || "Closed from Discord lawyer action panel.";
+  await updateRequestStatusFromPanel(env, ctx, detail, "CLOSED", {
+    channelId,
+    eventType: "LAWYER_STATUS_UPDATED",
+    auditType: "LAWYER_REQUEST_CLOSED_FROM_DISCORD_PANEL",
+    skipPrivateEmbedRefresh: true,
+    skipPermissionCheck: true
+  });
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "REQUEST_CLOSED", "Lawyer request closed from private attorney response panel.", {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    reason: cleanedReason
+  });
+  await archiveLawyerResponseThread(env, space);
+  return messageResponse(`Lawyer request **${detail.requestNumber}** closed.`, true);
+}
+
+async function archiveLawyerResponseThread(env: Env, space: LawyerResponseSpace): Promise<void> {
+  if (!validDiscordId(space.responseThreadId)) return;
+  const response = await discordApi(env, `/channels/${space.responseThreadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: true, locked: true })
+  });
+  if (!response.ok) {
+    console.warn(JSON.stringify({
+      event: "lawyer_response_thread_archive_failed",
+      responseThreadId: space.responseThreadId,
+      status: response.status,
+      details: (await response.text().catch(() => "")).slice(0, 180)
+    }));
+  }
+}
+
+async function createDocketFromRequestPanel(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, values: Map<string, string>): Promise<DiscordInteractionResponse> {
+  requireRequestPanelDocketAction(ctx, detail);
+  if (!env.DB) return messageResponse("D1 is not available.", true);
+  const title = (values.get("title") ?? "").trim();
+  if (!title) return messageResponse("Docket title is required.", true);
+  const suggestion = docketSuggestionFromRequest(detail);
+  const rawCaseType = (values.get("caseType") ?? "").trim();
+  const caseType = rawCaseType ? normalizeCaseType(rawCaseType) : suggestion.caseType;
+  const proceedingType = rawCaseType ? proceedingFromCaseType(caseType) : suggestion.proceedingType;
+  const status = normalizeDocketStatus(values.get("status") ?? "");
+  const summary = (values.get("summary") ?? "").trim() || suggestion.summaryMarkdown || `Public docket entry linked to ${detail.requestNumber}.`;
+  const assignedJudge = extractDiscordId(values.get("judge") ?? "");
+  const docketNumber = await nextDocketNumber(env, caseType);
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO docket_entries (
+      id, docket_number, case_id, title, entry_type, case_type, proceeding_type, plaintiff, defendant,
+      individuals_involved_json, judge_user_id, judge_name, status, filed_on, scheduled_for, scheduled_timezone,
+      scheduled_discord_timestamp, scheduled_discord_relative, summary, summary_markdown, public_notes_markdown,
+      private_notes_markdown, linked_service_request_id, linked_private_ticket_channel_id, linked_petition_url,
+      discord_sync_status, is_public, is_archived, visibility, published_at, created_at, updated_at, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'America/New_York', NULL, NULL, ?, ?, '', ?, ?, ?, ?, 'NOT_POSTED', 0, 0, 'PRIVATE', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)`
+  ).bind(
+    id,
+    docketNumber,
+    docketNumber,
+    title,
+    caseType,
+    caseType,
+    proceedingType,
+    suggestion.plaintiff ?? null,
+    suggestion.defendant ?? null,
+    JSON.stringify(suggestion.individualsInvolved ?? [detail.mainParty, detail.requesterDiscordUsername].filter(Boolean)),
+    assignedJudge || ctx.user.id,
+    assignedJudge ? `Discord ${assignedJudge}` : ctx.user.displayName,
+    status,
+    new Date().toISOString().slice(0, 10),
+    summary,
+    summary,
+    `Created from private Discord request action panel for ${detail.requestNumber}.`,
+    detail.id,
+    detail.discordTicketChannelId,
+    detail.documentUrl,
+    JSON.stringify({ source: "discord_request_action_panel", requestId: detail.id, requestNumber: detail.requestNumber })
+  ).run();
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "REQUEST_DOCKET_CREATED", "Docket entry created from Discord request action panel.", {
+    docketId: id,
+    docketNumber,
+    channel_id: detail.discordTicketChannelId
+  });
+  await audit(env, "REQUEST_DOCKET_CREATED_FROM_DISCORD_PANEL", { request_id: detail.id, docket_id: id, docket_number: docketNumber }, ctx.user.id);
+  await env.DB.prepare("UPDATE service_requests SET status = CASE WHEN status = 'SUBMITTED' THEN 'UNDER_REVIEW' ELSE status END, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .bind(detail.id)
+    .run();
+  const portal = docketPortalUrl(env, id);
+  if (detail.discordTicketChannelId) {
+    await postTicketMessage(env, detail.discordTicketChannelId, `Private docket entry **${docketNumber}** created from this request.${portal ? `\n${portal}` : ""}`, {});
+  }
+  return messageResponse(`Docket created: **${docketNumber}**${portal ? `\n${portal}` : ""}`, true);
 }
 
 async function addUserToTicket(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
@@ -1323,12 +1747,48 @@ async function postLawyerResponseOpeningMessage(env: Env, channelId: string, det
     `Attorney: <@${attorneyDiscordId}>`,
     "",
     "Secondary counsel, assigned judges, or DOJ oversight may be added when needed by authorized staff. Use this space to clarify custody status, charges, evidence, availability, and representation next steps. Do not share private or privileged details outside this thread/channel."
-  ].join("\n"), { users: [requesterDiscordId, attorneyDiscordId] });
+  ].join("\n"), { users: [requesterDiscordId, attorneyDiscordId] }, lawyerResponsePanelComponents(env, detail));
+}
+
+function lawyerResponsePanelComponents(env: Env, detail: ServiceRequestDetail): DiscordComponent[] {
+  const rows: DiscordComponent[] = [{
+    type: 1,
+    components: [{
+      type: 3,
+      custom_id: `law:status:${detail.id}`,
+      placeholder: "Set lawyer request status",
+      min_values: 1,
+      max_values: 1,
+      options: [
+        { label: "Received", value: "RECEIVED", description: "Mark the lawyer request as received." },
+        { label: "Under Review", value: "UNDER_REVIEW", description: "Move the lawyer request into review." },
+        { label: "Needs Info", value: "NEEDS_INFO", description: "Request more information." },
+        { label: "Closed", value: "CLOSED", description: "Close the lawyer request without reposting private details." }
+      ]
+    }]
+  }, {
+    type: 1,
+    components: [
+      { type: 2, style: 2, label: "Add Co-Counsel", custom_id: `law:addCounsel:${detail.id}` },
+      { type: 2, style: 2, label: "Add DOJ Oversight", custom_id: `law:addOversight:${detail.id}` },
+      { type: 2, style: 2, label: "Add Judge", custom_id: `law:addJudge:${detail.id}` },
+      { type: 2, style: 4, label: "Close Lawyer Request", custom_id: `law:close:${detail.id}` }
+    ]
+  }];
+  const portalUrl = lawyerRequestPortalUrl(env, detail.id);
+  if (portalUrl) {
+    rows.push({
+      type: 1,
+      components: [{ type: 2, style: 5, label: "View Portal Request", url: portalUrl }]
+    });
+  }
+  return rows;
 }
 
 async function ensureLawyerResponseMessagesPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<{ ok: true } | { ok: false; cause: unknown }> {
   try {
     await ensureLawyerResponseOpeningPosted(env, ctx, detail, space);
+    await ensureLawyerResponsePanelPosted(env, ctx, detail, space);
     await ensureLawyerResponseDetailsPosted(env, ctx, detail, space);
     return { ok: true };
   } catch (cause) {
@@ -1370,10 +1830,34 @@ async function ensureLawyerResponseOpeningPosted(env: Env, ctx: AuthContext, det
     postedMessageId,
     postedAt
   });
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, LAWYER_RESPONSE_PANEL_POSTED_EVENT, "Private attorney response action panel posted.", {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    postedMessageId,
+    postedAt
+  });
 }
 
 async function lawyerResponseOpeningAlreadyPosted(env: Env, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<boolean> {
   return lawyerResponseMessageEventExists(env, detail, space, LAWYER_RESPONSE_OPENING_POSTED_EVENT);
+}
+
+async function ensureLawyerResponsePanelPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<void> {
+  const channelId = lawyerResponseSpaceChannelId(space);
+  if (!validDiscordId(channelId)) throw new Error("Attorney response space is missing its Discord channel reference.");
+  if (await lawyerResponseMessageEventExists(env, detail, space, LAWYER_RESPONSE_PANEL_POSTED_EVENT)) return;
+  const postedMessageId = await postTicketMessage(env, channelId, `Lawyer request action panel for ${detail.requestNumber}.`, {}, lawyerResponsePanelComponents(env, detail));
+  const postedAt = new Date().toISOString();
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, LAWYER_RESPONSE_PANEL_POSTED_EVENT, "Private attorney response action panel posted.", {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    postedMessageId,
+    postedAt
+  });
 }
 
 async function ensureLawyerResponseDetailsPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<void> {
@@ -1770,6 +2254,166 @@ function parseLawyerResponseCustomId(customId: string): { action: "claim"; reque
   return { action: "claim", requestId: parts[2] };
 }
 
+function parsePanelCustomId(customId: string, scope: "req" | "law"): PanelCustomId | null {
+  const parts = customId.split(":");
+  if (parts.length !== 3 || parts[0] !== scope || !parts[1] || !parts[2]) return null;
+  return { scope, action: parts[1], requestId: parts[2] };
+}
+
+function parsePanelModalCustomId(customId: string): PanelModalCustomId | null {
+  const parts = customId.split(":");
+  if (parts.length !== 3 || (parts[0] !== "req" && parts[0] !== "law") || !parts[1].endsWith("Modal") || !parts[2]) return null;
+  return { scope: parts[0], action: parts[1].slice(0, -"Modal".length), requestId: parts[2] };
+}
+
+function requestPanelModal(action: string, requestId: string): DiscordInteractionResponse | null {
+  if (action === "addUser") {
+    return modalResponse(`req:addUserModal:${requestId}`, "Add Person", [
+      textInput("user", "Discord user ID or @mention", 1, { placeholder: "123456789012345678 or @Name" }),
+      textInput("reason", "Reason / access note", 2, { required: false, placeholder: "Why this person needs access" })
+    ]);
+  }
+  if (action === "addRole") {
+    return modalResponse(`req:addRoleModal:${requestId}`, "Add Role", [
+      textInput("role", "Discord role ID or @role", 1, { placeholder: "123456789012345678 or @Role" }),
+      textInput("reason", "Reason / access note", 2, { required: false, placeholder: "Why this role needs access" })
+    ]);
+  }
+  if (action === "createDocket") {
+    return modalResponse(`req:createDocketModal:${requestId}`, "Create Docket Entry", [
+      textInput("title", "Docket title", 1, { placeholder: "State v. Name / Petition review" }),
+      textInput("caseType", "Case type", 1, { required: false, placeholder: "CRIMINAL, CIVIL, WARRANT, SUBPOENA, EXPUNGEMENT" }),
+      textInput("summary", "Short public docket summary", 2, { placeholder: "Public-safe summary only. No private request facts." }),
+      textInput("judge", "Assigned judge/user ID", 1, { required: false, placeholder: "Optional Discord user ID or @mention" }),
+      textInput("status", "Initial docket status", 1, { required: false, placeholder: "DRAFT, PENDING, IN_REVIEW, SCHEDULED" })
+    ]);
+  }
+  if (action === "close") {
+    return modalResponse(`req:closeModal:${requestId}`, "Close Request", [
+      textInput("reason", "Close reason", 2, { placeholder: "Reason for closing this request/channel" })
+    ]);
+  }
+  return null;
+}
+
+function lawyerPanelModal(action: string, requestId: string): DiscordInteractionResponse | null {
+  if (action === "addCounsel" || action === "addOversight" || action === "addJudge") {
+    const title = action === "addCounsel" ? "Add Co-Counsel" : action === "addOversight" ? "Add DOJ Oversight" : "Add Judge";
+    return modalResponse(`law:${action}Modal:${requestId}`, title, [
+      textInput("user", "Discord user ID or @mention", 1, { placeholder: "123456789012345678 or @Name" }),
+      textInput("reason", "Reason / access note", 2, { required: false, placeholder: "Why this person should join the response space" })
+    ]);
+  }
+  if (action === "close") {
+    return modalResponse(`law:closeModal:${requestId}`, "Close Lawyer Request", [
+      textInput("reason", "Close reason", 2, { placeholder: "Reason for closing this lawyer request" })
+    ]);
+  }
+  return null;
+}
+
+function modalResponse(customId: string, title: string, inputs: DiscordComponent[]): DiscordInteractionResponse {
+  return {
+    type: 9,
+    data: {
+      custom_id: truncate(customId, 100),
+      title: truncate(title, 45),
+      components: inputs.map((input) => ({ type: 1, components: [input] }))
+    }
+  };
+}
+
+function textInput(
+  customId: string,
+  label: string,
+  style: 1 | 2,
+  options: { required?: boolean; placeholder?: string; minLength?: number; maxLength?: number } = {}
+): DiscordComponent {
+  return {
+    type: 4,
+    custom_id: customId,
+    label,
+    style,
+    required: options.required ?? true,
+    placeholder: options.placeholder,
+    min_length: options.minLength,
+    max_length: options.maxLength ?? (style === 1 ? 200 : 1000)
+  };
+}
+
+function modalValueMap(interaction: DiscordInteraction): Map<string, string> {
+  const values = new Map<string, string>();
+  const visit = (component: DiscordComponent) => {
+    if (component.custom_id && typeof component.value === "string") values.set(component.custom_id, component.value.trim());
+    for (const child of component.components ?? []) visit(child);
+  };
+  for (const component of interaction.data?.components ?? []) visit(component);
+  return values;
+}
+
+function normalizeRequestPanelStatus(value: string): ServiceRequestStatus | null {
+  const normalized = value.trim().toUpperCase();
+  return REQUEST_PANEL_STATUS_OPTIONS.includes(normalized as ServiceRequestStatus) ? normalized as ServiceRequestStatus : null;
+}
+
+function extractDiscordId(value: string): string {
+  const match = value.match(/\d{17,20}/);
+  return validDiscordId(match?.[0]) ? match[0] : "";
+}
+
+function docketPortalUrl(env: Env, docketId: string): string | null {
+  const base = env.PUBLIC_APP_URL?.replace(/\/+$/, "");
+  if (!base) return null;
+  try {
+    return new URL(`/dashboard/docket/${encodeURIComponent(docketId)}`, base).toString();
+  } catch {
+    return null;
+  }
+}
+
+function requireRequestPanelStatusAction(ctx: AuthContext, detail: ServiceRequestDetail): void {
+  requireRequestPanelAction(ctx, detail);
+}
+
+function requireRequestPanelChannelAction(ctx: AuthContext, detail: ServiceRequestDetail): void {
+  if (canManageRequestPanelAction(ctx, detail) || hasActionPermission(ctx, "MANAGE_DISCORD_CHANNELS")) return;
+  throw new PermissionError("MANAGE_REQUESTS");
+}
+
+function requireRequestPanelAccessAction(ctx: AuthContext, detail: ServiceRequestDetail): void {
+  if (canManageRequestPanelAction(ctx, detail) || hasActionPermission(ctx, "MANAGE_DISCORD_CHANNELS")) return;
+  throw new PermissionError("MANAGE_DISCORD_CHANNELS");
+}
+
+function requireRequestPanelDocketAction(ctx: AuthContext, detail: ServiceRequestDetail): void {
+  if (canManageRequestPanelAction(ctx, detail) || hasActionPermission(ctx, "CREATE_DOCKET") || hasActionPermission(ctx, "PUBLISH_DOCKET")) return;
+  throw new PermissionError("CREATE_DOCKET");
+}
+
+function requireRequestPanelAction(ctx: AuthContext, detail: ServiceRequestDetail): void {
+  if (canManageRequestPanelAction(ctx, detail)) return;
+  throw new PermissionError("MANAGE_REQUESTS");
+}
+
+function canManageRequestPanelAction(ctx: AuthContext, detail: ServiceRequestDetail): boolean {
+  return hasActionPermission(ctx, "ADMIN")
+    || hasActionPermission(ctx, "MANAGE_REQUESTS")
+    || isJudicialPanelUser(ctx) && judicialRequestType(detail.requestType);
+}
+
+function requireLawyerPanelAction(ctx: AuthContext, _detail: ServiceRequestDetail, space: LawyerResponseSpace): void {
+  if (canOverrideLawyerParticipantGate(ctx) || space.attorneyDiscordId === ctx.user.discordId || canManageLawyerResponseAccess(ctx)) return;
+  throw new PermissionError("MANAGE_REQUESTS");
+}
+
+function isJudicialPanelUser(ctx: AuthContext): boolean {
+  return ctx.permissions.includes("JUDGE") || ctx.permissions.includes("JUSTICE") || ctx.permissions.includes("CHIEF_JUSTICE") || ctx.permissions.includes("ADMIN");
+}
+
+function judicialRequestType(type: ServiceRequestType): boolean {
+  return type !== "LAWYER" && type !== "GENERAL";
+}
+
 function metadataString(metadata: Record<string, unknown>, key: string): string {
   const value = metadata[key];
   return typeof value === "string" ? value.trim() : "";
@@ -1880,12 +2524,13 @@ async function putTicketPermissionOverwrite(env: Env, channelId: string, overwri
   if (!response.ok) throw new Error(`Discord permission overwrite failed with ${response.status}: ${await responseTextSnippet(response)}`);
 }
 
-async function postTicketMessage(env: Env, channelId: string, content: string, mentions: { users?: string[]; roles?: string[] }): Promise<string | null> {
+async function postTicketMessage(env: Env, channelId: string, content: string, mentions: { users?: string[]; roles?: string[] }, components: DiscordComponent[] = []): Promise<string | null> {
   const response = await discordApi(env, `/channels/${channelId}/messages`, {
     method: "POST",
     body: JSON.stringify({
       content: truncate(content, 1900),
-      allowed_mentions: safeAllowedMentions(mentions)
+      allowed_mentions: safeAllowedMentions(mentions),
+      ...(components.length ? { components } : {})
     })
   });
   if (!response.ok) throw new Error(`Discord ticket message post failed with ${response.status}: ${await responseTextSnippet(response)}`);
@@ -2427,6 +3072,14 @@ interface LawyerResponseDetailsEmbed {
   footer: { text: string };
   timestamp: string;
 }
+
+interface PanelCustomId {
+  scope: "req" | "law";
+  action: string;
+  requestId: string;
+}
+
+interface PanelModalCustomId extends PanelCustomId {}
 
 type LawyerResponseEventType = (typeof LAWYER_RESPONSE_EVENT_TYPES)[number];
 

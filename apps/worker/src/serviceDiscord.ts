@@ -65,9 +65,24 @@ interface DiscordButtonComponent {
   url?: string;
 }
 
+interface DiscordSelectOption {
+  label: string;
+  value: string;
+  description?: string;
+}
+
+interface DiscordStringSelectComponent {
+  type: 3;
+  custom_id: string;
+  placeholder?: string;
+  min_values?: number;
+  max_values?: number;
+  options: DiscordSelectOption[];
+}
+
 interface DiscordActionRowComponent {
   type: 1;
-  components: DiscordButtonComponent[];
+  components: Array<DiscordButtonComponent | DiscordStringSelectComponent>;
 }
 
 export interface LawyerStickyResult {
@@ -569,14 +584,38 @@ function privateServiceRequestEmbed(env: Env, request: ServiceRequestDetail) {
 }
 
 function privateTicketComponents(env: Env, request: ServiceRequestDetail): DiscordActionRowComponent[] {
-  const components: DiscordButtonComponent[] = [
-    { type: 2, style: 1, label: "Claim", custom_id: `ticket_action:claim:${request.id}` },
-    { type: 2, style: 4, label: "Close", custom_id: `ticket_action:close:${request.id}` },
-    { type: 2, style: 2, label: "Transcript", custom_id: `ticket_action:transcript:${request.id}` }
+  const rows: DiscordActionRowComponent[] = [{
+    type: 1,
+    components: [{
+      type: 3,
+      custom_id: `req:status:${request.id}`,
+      placeholder: "Set status",
+      min_values: 1,
+      max_values: 1,
+      options: [
+        { label: "Received", value: "RECEIVED", description: "Mark the request as received." },
+        { label: "Under Review", value: "UNDER_REVIEW", description: "Move the request into review." },
+        { label: "Needs Info", value: "NEEDS_INFO", description: "Request more information." },
+        { label: "Closed", value: "CLOSED", description: "Mark the request closed without deleting this panel." }
+      ]
+    }]
+  }, {
+    type: 1,
+    components: [
+      { type: 2, style: 1, label: "Claim / Assign", custom_id: `req:claim:${request.id}` },
+      { type: 2, style: 2, label: "Add Person", custom_id: `req:addUser:${request.id}` },
+      { type: 2, style: 2, label: "Add Role", custom_id: `req:addRole:${request.id}` },
+      { type: 2, style: 3, label: "Create Docket Entry", custom_id: `req:createDocket:${request.id}` }
+    ]
+  }];
+  const utilityComponents: DiscordButtonComponent[] = [
+    { type: 2, style: 2, label: "Transcript", custom_id: `req:transcript:${request.id}` },
+    { type: 2, style: 4, label: "Close", custom_id: `req:close:${request.id}` }
   ];
   const portalUrl = requestPortalUrl(env, request.id);
-  if (portalUrl) components.push({ type: 2, style: 5, label: "View Portal Request", url: portalUrl });
-  return [{ type: 1, components }];
+  if (portalUrl) utilityComponents.unshift({ type: 2, style: 5, label: "View Portal Request", url: portalUrl });
+  rows.push({ type: 1, components: utilityComponents });
+  return rows;
 }
 
 function publicRequestComponents(request: ServiceRequestDetail): DiscordActionRowComponent[] {
