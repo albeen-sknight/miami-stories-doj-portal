@@ -22,7 +22,7 @@ import { BAR_EXAM_ATTEMPT_STATUSES, DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, 
 import { audit } from "./audit";
 import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, getServiceRequestDetailByTicketChannel, addServiceRequestEvent, closeServiceRequestTicketForContext, latestServiceRequestTicketClaim } from "./serviceRequests";
 import { postLawyerSticky, postServiceRequestEmbedToPrivateTicket } from "./serviceDiscord";
-import { discordApi, fetchBotUser, fetchGuildMember, requireEnv } from "./discord";
+import { discordApi, fetchBotUser, fetchGuildMember, MissingEnvironmentError, requireEnv } from "./discord";
 import { CASE_TYPE_PREFIX, docketSuggestionFromRequest } from "./docketDefinitions";
 import { errorJson } from "./http";
 import { hasActionPermission, isActionPermission, isLogicalPermission, mergeActionPermissions, PermissionError, requireAnyPermission, requirePermission } from "./permissions";
@@ -255,9 +255,14 @@ export async function discordInteractions(request: Request, env: Env, executionC
     return interactionJson(response);
   } catch (cause) {
     if (cause instanceof PermissionError || (cause instanceof Error && cause.name === "PermissionError")) {
-      const response = messageResponse("You do not have permission to use this command.", true);
+      const response = messageResponse("You are not authorized to use this command.", true);
       logInteraction(interaction, response, null, safeError(cause));
       return interactionJson(response);
+    }
+    const commandError = commandErrorResponse(cause);
+    if (commandError) {
+      logInteraction(interaction, commandError, null, safeError(cause), commandName, actorDiscordId);
+      return interactionJson(commandError);
     }
     const response = messageResponse("An internal error occurred while handling this command. Staff can check Worker logs.", true);
     logInteraction(interaction, response, null, safeError(cause), commandName, actorDiscordId);
@@ -279,8 +284,8 @@ async function processDeferredCommand(env: Env, interaction: DiscordInteraction,
     await editOriginalInteractionResponse(env, interaction, response);
   } catch (cause) {
     const response = cause instanceof PermissionError || (cause instanceof Error && cause.name === "PermissionError")
-      ? messageResponse("You do not have permission to use this command.", true)
-      : messageResponse("An internal error occurred while handling this command. Staff can check Worker logs.", true);
+      ? messageResponse("You are not authorized to use this command.", true)
+      : commandErrorResponse(cause) ?? messageResponse("An internal error occurred while handling this command. Staff can check Worker logs.", true);
     logInteraction(interaction, response, null, safeError(cause), commandName, actorDiscordId);
     console.error(JSON.stringify({
       event: "discord_deferred_interaction_failed",
@@ -833,10 +838,11 @@ async function createChannelCommand(env: Env, ctx: AuthContext, interaction: Dis
   const guildId = requireGuildInteraction(env, interaction);
   const name = sanitizeDiscordChannelName(stringOption(options, "name"));
   if (!name) return messageResponse("Channel name must include at least one letter or number.", true);
-  const categoryId = optionalDiscordIdOption(options, "category");
+  const category = optionalDiscordIdValidation(options, "category", "Category");
+  if (!category.ok) return messageResponse(category.message, true);
   const allowedRoles = parseIdList(stringOption(options, "allowed_roles"), "role");
   const deniedRoles = parseIdList(stringOption(options, "denied_roles"), "role");
-  const validation = idListError(allowedRoles, "allowed_roles") || idListError(deniedRoles, "denied_roles");
+  const validation = idListError(allowedRoles, "allowed_roles", guildId) || idListError(deniedRoles, "denied_roles", guildId);
   if (validation) return messageResponse(validation, true);
   const staffOnly = booleanOption(options, "staff_only", false);
   const staffRoles = staffOnly ? await configuredStaffRoleIds(env) : [];
@@ -845,17 +851,17 @@ async function createChannelCommand(env: Env, ctx: AuthContext, interaction: Dis
     roleAllowIds: [...staffRoles, ...allowedRoles.ids],
     roleDenyIds: deniedRoles.ids
   });
-  const channel = await createGuildChannel(env, guildId, {
+  const channel = await createGuildChannel(env, guildId, channelCreatePayload({
     name,
     type: GUILD_TEXT_CHANNEL,
-    topic: cleanTextOption(options, "topic", 1024) || undefined,
-    parent_id: categoryId || undefined,
-    permission_overwrites: overwrites.length ? overwrites : undefined
-  }, cleanTextOption(options, "reason", 512));
+    topic: cleanTextOption(options, "topic", 1024),
+    parentId: category.id,
+    permissionOverwrites: overwrites
+  }), cleanTextOption(options, "reason", 512));
   await recordDiscordAdminAction(env, ctx, "CHANNEL_CREATED", "channel", channel.id, `Created channel #${channel.name ?? name}.`, {
     channel_id: channel.id,
     channel_name: channel.name ?? name,
-    category_id: categoryId || null,
+    category_id: category.id || null,
     staff_only: staffOnly,
     allowed_role_ids: allowedRoles.ids,
     denied_role_ids: deniedRoles.ids,
@@ -871,25 +877,26 @@ async function createPrivateChannelCommand(env: Env, ctx: AuthContext, interacti
   if (!name) return messageResponse("Channel name must include at least one letter or number.", true);
   const users = parseIdList(stringOption(options, "users"), "user");
   const roles = parseIdList(stringOption(options, "roles"), "role");
-  const validation = idListError(users, "users") || idListError(roles, "roles");
+  const validation = idListError(users, "users") || idListError(roles, "roles", guildId);
   if (validation) return messageResponse(validation, true);
-  const categoryId = optionalDiscordIdOption(options, "category");
+  const category = optionalDiscordIdValidation(options, "category", "Category");
+  if (!category.ok) return messageResponse(category.message, true);
   const staffRoles = await configuredStaffRoleIds(env);
-  const channel = await createGuildChannel(env, guildId, {
+  const channel = await createGuildChannel(env, guildId, channelCreatePayload({
     name,
     type: GUILD_TEXT_CHANNEL,
-    topic: cleanTextOption(options, "topic", 1024) || undefined,
-    parent_id: categoryId || undefined,
-    permission_overwrites: channelOverwrites(guildId, {
+    topic: cleanTextOption(options, "topic", 1024),
+    parentId: category.id,
+    permissionOverwrites: channelOverwrites(guildId, {
       everyoneDenied: true,
       userAllowIds: users.ids,
       roleAllowIds: [...staffRoles, ...roles.ids]
     })
-  }, cleanTextOption(options, "reason", 512));
+  }), cleanTextOption(options, "reason", 512));
   await recordDiscordAdminAction(env, ctx, "PRIVATE_CHANNEL_CREATED", "channel", channel.id, `Created private channel #${channel.name ?? name}.`, {
     channel_id: channel.id,
     channel_name: channel.name ?? name,
-    category_id: categoryId || null,
+    category_id: category.id || null,
     user_ids: users.ids,
     role_ids: roles.ids,
     staff_role_ids: staffRoles,
@@ -907,7 +914,7 @@ async function createCategoryCommand(env: Env, ctx: AuthContext, interaction: Di
   if (!visibility) return messageResponse("Choose a valid visibility: public, staff_only, private_roles, or private_users_and_roles.", true);
   const users = parseIdList(stringOption(options, "users"), "user");
   const roles = parseIdList(stringOption(options, "roles"), "role");
-  const validation = idListError(users, "users") || idListError(roles, "roles") || categoryVisibilityError(visibility, users.ids, roles.ids);
+  const validation = idListError(users, "users") || idListError(roles, "roles", guildId) || categoryVisibilityError(visibility, users.ids, roles.ids);
   if (validation) return messageResponse(validation, true);
   const category = await createGuildChannel(env, guildId, {
     name,
@@ -937,7 +944,7 @@ async function createCategoryLayoutCommand(env: Env, ctx: AuthContext, interacti
   if (!purpose) return messageResponse("Purpose is required for a category layout.", true);
   const users = parseIdList(stringOption(options, "users"), "user");
   const roles = parseIdList(stringOption(options, "roles"), "role");
-  const validation = idListError(users, "users") || idListError(roles, "roles") || categoryVisibilityError(visibility, users.ids, roles.ids);
+  const validation = idListError(users, "users") || idListError(roles, "roles", guildId) || categoryVisibilityError(visibility, users.ids, roles.ids);
   if (validation) return messageResponse(validation, true);
   const parsedChannels = parseLayoutChannelNames(stringOption(options, "channels"));
   if (parsedChannels.names.length === 0) return messageResponse("Provide at least one valid channel name.", true);
@@ -3011,6 +3018,25 @@ function optionalDiscordIdOption(options: Map<string, OptionValue>, key: string)
   return extractDiscordId(value) ?? "";
 }
 
+function optionalDiscordIdValidation(options: Map<string, OptionValue>, key: string, label: string): { ok: true; id: string } | { ok: false; message: string } {
+  const raw = stringOption(options, key);
+  if (!raw) return { ok: true, id: "" };
+  const id = optionalDiscordIdOption(options, key);
+  if (!id) return { ok: false, message: `${label} must be a valid Discord ID, mention, or selector value.` };
+  return { ok: true, id };
+}
+
+function channelCreatePayload(input: { name: string; type: number; topic?: string; parentId?: string; permissionOverwrites?: DiscordPermissionOverwriteInput[] }): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: input.name,
+    type: input.type
+  };
+  if (input.parentId) payload.parent_id = input.parentId;
+  if (input.topic) payload.topic = input.topic;
+  if (input.permissionOverwrites?.length) payload.permission_overwrites = input.permissionOverwrites;
+  return payload;
+}
+
 function sanitizeDiscordChannelName(value: string): string {
   return value
     .toLowerCase()
@@ -3106,7 +3132,7 @@ async function createGuildChannel(env: Env, guildId: string, payload: Record<str
     headers: reason ? { "X-Audit-Log-Reason": discordAuditReason(reason) } : undefined,
     body: JSON.stringify(payload)
   });
-  if (!response.ok) throw new Error(`Discord channel create failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("create channel", response);
   return await response.json() as DiscordCreatedChannel;
 }
 
@@ -3115,12 +3141,12 @@ async function deleteDiscordChannel(env: Env, channelId: string, reason: string)
     method: "DELETE",
     headers: reason ? { "X-Audit-Log-Reason": discordAuditReason(reason) } : undefined
   });
-  if (!response.ok) throw new Error(`Discord channel delete failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("delete channel", response);
 }
 
 async function fetchGuildChannels(env: Env, guildId: string): Promise<DiscordChannelDetails[]> {
   const response = await discordApi(env, `/guilds/${guildId}/channels`);
-  if (!response.ok) throw new Error(`Discord guild channel list failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("list guild channels", response);
   return await response.json() as DiscordChannelDetails[];
 }
 
@@ -3129,7 +3155,7 @@ async function postDiscordChannelMessage(env: Env, channelId: string, content: s
     method: "POST",
     body: JSON.stringify({ content: truncate(content, 2000), allowed_mentions: safeAllowedMentions(mentions) })
   });
-  if (!response.ok) throw new Error(`Discord channel message failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("post channel message", response);
   const body = await response.json().catch(() => ({})) as { id?: string };
   return typeof body.id === "string" ? body.id : null;
 }
@@ -3137,11 +3163,31 @@ async function postDiscordChannelMessage(env: Env, channelId: string, content: s
 async function configuredStaffRoleIds(env: Env): Promise<string[]> {
   if (!env.DB) return [];
   const placeholders = DISCORD_STAFF_ROLE_PERMISSION_KEYS.map(() => "?").join(", ");
-  const result = await env.DB.prepare(
-    `SELECT discord_role_id as id FROM role_mappings
-     WHERE permission_key IN (${placeholders}) AND is_reference_only = 0 AND discord_role_id != ''`
-  ).bind(...DISCORD_STAFF_ROLE_PERMISSION_KEYS).all<{ id: string }>();
-  return uniqueValidDiscordIds(result.results.map((row) => row.id));
+  try {
+    const result = await env.DB.prepare(
+      `SELECT discord_role_id as id FROM role_mappings
+       WHERE permission_key IN (${placeholders}) AND is_reference_only = 0 AND discord_role_id != ''`
+    ).bind(...DISCORD_STAFF_ROLE_PERMISSION_KEYS).all<{ id: string }>();
+    return guildExistingRoleIds(env, uniqueValidDiscordIds(result.results.map((row) => row.id)));
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "discord_staff_role_lookup_failed", cause: safeError(cause) }));
+    return [];
+  }
+}
+
+async function guildExistingRoleIds(env: Env, roleIds: string[]): Promise<string[]> {
+  if (roleIds.length === 0) return [];
+  try {
+    const roles = await fetchGuildRoles(env);
+    const existing = new Set(roles.map((role) => role.id));
+    const valid = roleIds.filter((roleId) => existing.has(roleId));
+    const stale = roleIds.filter((roleId) => !existing.has(roleId));
+    if (stale.length) console.warn(JSON.stringify({ event: "discord_staff_role_ids_stale", staleRoleIds: stale }));
+    return valid;
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "discord_staff_role_validation_failed", cause: safeError(cause) }));
+    return [];
+  }
 }
 
 async function protectedDiscordCategoryIds(env: Env): Promise<Set<string>> {
@@ -3268,7 +3314,7 @@ async function updateMemberTimeout(env: Env, guildId: string, userId: string, ex
     headers: { "X-Audit-Log-Reason": discordAuditReason(reason) },
     body: JSON.stringify({ communication_disabled_until: expiresAt })
   });
-  if (!response.ok) throw new Error(`Discord timeout update failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("update timeout", response);
 }
 
 async function dmUser(env: Env, userId: string, content: string): Promise<void> {
@@ -3302,7 +3348,7 @@ async function ensureModerationHierarchy(env: Env, ctx: AuthContext, interaction
 async function fetchGuildRoles(env: Env): Promise<DiscordGuildRole[]> {
   const guildId = requireEnv(env, "DISCORD_GUILD_ID");
   const response = await discordApi(env, `/guilds/${guildId}/roles`);
-  if (!response.ok) throw new Error(`Discord guild roles fetch failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("fetch guild roles", response);
   return await response.json() as DiscordGuildRole[];
 }
 
@@ -3357,7 +3403,7 @@ async function ticketAccessAllow(env: Env, channelId: string): Promise<bigint> {
 
 async function fetchDiscordChannel(env: Env, channelId: string): Promise<DiscordChannelDetails> {
   const response = await discordApi(env, `/channels/${channelId}`);
-  if (!response.ok) throw new Error(`Discord channel fetch failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  if (!response.ok) throw await discordCommandApiError("fetch channel", response);
   return await response.json() as DiscordChannelDetails;
 }
 
@@ -3444,6 +3490,29 @@ function permissionBits(value: string | undefined): bigint {
 
 async function responseTextSnippet(response: Response): Promise<string> {
   return (await response.text().catch(() => "")).slice(0, 220);
+}
+
+async function discordCommandApiError(action: string, response: Response): Promise<DiscordCommandApiError> {
+  return new DiscordCommandApiError(action, response.status, await responseTextSnippet(response));
+}
+
+function commandErrorResponse(cause: unknown): DiscordInteractionResponse | null {
+  if (cause instanceof DiscordCommandApiError) {
+    const details = cause.details ? `\nDiscord response: ${truncate(cause.details, 900)}` : "";
+    return messageResponse(`Discord ${cause.action} failed with status ${cause.status}.${details}`, true);
+  }
+  if (cause instanceof MissingEnvironmentError || (cause instanceof Error && cause.constructor.name === "MissingEnvironmentError")) {
+    const key = cause instanceof MissingEnvironmentError ? cause.key : "required Discord setting";
+    return messageResponse(`Discord command configuration is missing: ${key}.`, true);
+  }
+  return null;
+}
+
+class DiscordCommandApiError extends Error {
+  constructor(public readonly action: string, public readonly status: number, public readonly details: string) {
+    super(`Discord ${action} failed with status ${status}: ${details}`);
+    this.name = "DiscordCommandApiError";
+  }
 }
 
 async function authContextFromInteraction(env: Env, interaction: DiscordInteraction): Promise<AuthContext> {
