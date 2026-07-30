@@ -616,19 +616,25 @@ function publicServiceRequestEmbed(request: ServiceRequestDetail) {
 }
 
 function serviceRequestMentionContent(request: ServiceRequestDetail, mentions: ServiceRequestMentions, includeMentions: boolean): string {
-  const userMentions = includeMentions ? mentions.userIds.map((id) => `<@${id}>`) : [];
-  const roleMentions = includeMentions ? mentions.roleIds.map((id) => `<@&${id}>`) : [];
+  const userMentions = includeMentions ? uniqueValidDiscordIds(mentions.userIds).map((id) => `<@${id}>`) : [];
+  const roleMentions = includeMentions ? uniqueValidDiscordIds(mentions.roleIds).map((id) => `<@&${id}>`) : [];
   const mentionLine = [...userMentions, ...roleMentions].join(" ");
   const title = `New ${request.requestType.replaceAll("_", " ")} Request: ${request.requestNumber}`;
   return mentionLine ? `${mentionLine}\n${title}` : title;
 }
 
 function allowedMentions(mentions: ServiceRequestMentions) {
+  const users = uniqueValidDiscordIds(mentions.userIds);
+  const roles = uniqueValidDiscordIds(mentions.roleIds);
   return {
     parse: [],
-    users: mentions.userIds,
-    roles: mentions.roleIds
+    ...(users.length ? { users } : {}),
+    ...(roles.length ? { roles } : {})
   };
+}
+
+function uniqueValidDiscordIds(values: string[]): string[] {
+  return [...new Set(values.filter((value) => /^\d{17,20}$/.test(value)))];
 }
 
 function detailFieldChunks(payload: Record<string, unknown>): string[] {

@@ -45,7 +45,9 @@ const PUBLIC_THREAD = 11;
 const PRIVATE_THREAD = 12;
 const TICKET_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_REQUESTS", "ADMIN"];
 const LAWYER_RESPONSE_EVENT_TYPES = ["LAWYER_RESPONSE_CLAIMED", "LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF"] as const;
+const LAWYER_RESPONSE_OPENING_POSTED_EVENT = "LAWYER_RESPONSE_OPENING_POSTED";
 const LAWYER_RESPONSE_DETAILS_POSTED_EVENT = "LAWYER_RESPONSE_DETAILS_POSTED";
+const LAWYER_RESPONSE_MESSAGE_POST_FAILED_EVENT = "LAWYER_RESPONSE_MESSAGE_POST_FAILED";
 const LAWYER_RESPONSE_DETAILS_NOTE = "These details are posted only inside this private attorney response space. Do not repost them publicly.";
 const LAWYER_RESPONSE_DETAILS_MAX_EMBEDS = 8;
 const LAWYER_RESPONSE_DETAILS_MAX_FIELD_NAME = 256;
@@ -935,11 +937,20 @@ async function ensureLawyerResponseSpace(
     const availability = await fetchExistingLawyerResponseChannel(env, existing);
     if (availability.exists) {
       if (availability.channel) await reopenLawyerResponseThreadIfArchived(env, availability.channel);
-      await ensureLawyerResponseDetailsPosted(env, ctx, detail, existing);
       if (options.duplicateMode === "block-other-attorney" && existing.attorneyDiscordId !== attorneyDiscordId) {
         return {
           ok: false,
           response: messageResponse(`This request is already claimed by <@${existing.attorneyDiscordId}>. Staff may override or add another attorney if needed.`, true)
+        };
+      }
+      const messagePost = await ensureLawyerResponseMessagesPosted(env, ctx, detail, existing);
+      if (!messagePost.ok) {
+        return {
+          ok: true,
+          detail,
+          space: existing,
+          created: false,
+          message: `Private attorney response space already exists for **${detail.requestNumber}**, but the bot could not post the opening details message: ${safeError(messagePost.cause)}\nSpace: ${discordChannelUrl(env, lawyerResponseSpaceChannelId(existing))}`
         };
       }
       return {
@@ -1012,7 +1023,16 @@ async function ensureLawyerResponseSpace(
     response_thread_id: space.responseThreadId,
     response_channel_id: space.responseChannelId
   }, ctx.user.id);
-  await ensureLawyerResponseDetailsPosted(env, ctx, detail, space);
+  const messagePost = await ensureLawyerResponseMessagesPosted(env, ctx, detail, space);
+  if (!messagePost.ok) {
+    return {
+      ok: true,
+      detail,
+      space,
+      created: true,
+      message: `Private attorney response space was created, but the bot could not post the opening details message: ${safeError(messagePost.cause)}\nSpace: ${discordChannelUrl(env, lawyerResponseSpaceChannelId(space))}`
+    };
+  }
   await postPublicLawyerClaimNotice(env, detail, originalChannelId).catch((cause) => {
     console.warn(JSON.stringify({
       event: "lawyer_response_public_notice_failed",
@@ -1072,7 +1092,6 @@ async function createPrivateLawyerResponseThread(
   try {
     await addLawyerThreadMember(env, thread.id, input.requesterDiscordId);
     await addLawyerThreadMember(env, thread.id, input.attorneyDiscordId);
-    await postLawyerResponseOpeningMessage(env, thread.id, detail, input.requesterDiscordId, input.attorneyDiscordId);
   } catch (cause) {
     await discordApi(env, `/channels/${thread.id}`, { method: "DELETE" }).catch(() => null);
     throw cause;
@@ -1113,7 +1132,6 @@ async function createLawyerResponseFallbackChannel(
     throw new Error(`Discord fallback response channel create failed with ${response.status}: ${await responseTextSnippet(response)}${threadFailure ? `; thread failure: ${threadFailure}` : ""}`);
   }
   const channel = await response.json() as { id: string; name?: string };
-  await postLawyerResponseOpeningMessage(env, channel.id, detail, input.requesterDiscordId, input.attorneyDiscordId);
   return { kind: "channel", id: channel.id, name: channel.name ?? lawyerResponseSpaceName(detail), fallbackReason: threadFailure };
 }
 
@@ -1297,8 +1315,8 @@ async function addLawyerThreadMember(env: Env, threadId: string, userId: string)
   if (!response.ok) throw new Error(`Discord thread member add failed with ${response.status}: ${await responseTextSnippet(response)}`);
 }
 
-async function postLawyerResponseOpeningMessage(env: Env, channelId: string, detail: ServiceRequestDetail, requesterDiscordId: string, attorneyDiscordId: string) {
-  await postTicketMessage(env, channelId, [
+async function postLawyerResponseOpeningMessage(env: Env, channelId: string, detail: ServiceRequestDetail, requesterDiscordId: string, attorneyDiscordId: string): Promise<string | null> {
+  return postTicketMessage(env, channelId, [
     `Private attorney response space for ${detail.requestNumber}.`,
     "",
     `Requester: <@${requesterDiscordId}>`,
@@ -1306,6 +1324,56 @@ async function postLawyerResponseOpeningMessage(env: Env, channelId: string, det
     "",
     "Secondary counsel, assigned judges, or DOJ oversight may be added when needed by authorized staff. Use this space to clarify custody status, charges, evidence, availability, and representation next steps. Do not share private or privileged details outside this thread/channel."
   ].join("\n"), { users: [requesterDiscordId, attorneyDiscordId] });
+}
+
+async function ensureLawyerResponseMessagesPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<{ ok: true } | { ok: false; cause: unknown }> {
+  try {
+    await ensureLawyerResponseOpeningPosted(env, ctx, detail, space);
+    await ensureLawyerResponseDetailsPosted(env, ctx, detail, space);
+    return { ok: true };
+  } catch (cause) {
+    const channelId = lawyerResponseSpaceChannelId(space);
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, LAWYER_RESPONSE_MESSAGE_POST_FAILED_EVENT, "Private attorney response space was created or returned, but the bot could not post the opening/details message.", {
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      responseThreadId: space.responseThreadId,
+      responseChannelId: space.responseChannelId,
+      responseSpaceId: validDiscordId(channelId) ? channelId : null,
+      attorneyDiscordId: space.attorneyDiscordId,
+      requesterDiscordId: space.requesterDiscordId,
+      cause: safeError(cause),
+      failedAt: new Date().toISOString()
+    });
+    console.warn(JSON.stringify({
+      event: "lawyer_response_message_post_failed",
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      responseSpaceId: validDiscordId(channelId) ? channelId : null,
+      cause: safeError(cause)
+    }));
+    return { ok: false, cause };
+  }
+}
+
+async function ensureLawyerResponseOpeningPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<void> {
+  const channelId = lawyerResponseSpaceChannelId(space);
+  if (!validDiscordId(channelId)) throw new Error("Attorney response space is missing its Discord channel reference.");
+  if (await lawyerResponseOpeningAlreadyPosted(env, detail, space)) return;
+
+  const postedMessageId = await postLawyerResponseOpeningMessage(env, channelId, detail, space.requesterDiscordId, space.attorneyDiscordId);
+  const postedAt = new Date().toISOString();
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, LAWYER_RESPONSE_OPENING_POSTED_EVENT, "Private attorney response opening message posted.", {
+    requestId: detail.id,
+    requestNumber: detail.requestNumber,
+    responseThreadId: space.responseThreadId,
+    responseChannelId: space.responseChannelId,
+    postedMessageId,
+    postedAt
+  });
+}
+
+async function lawyerResponseOpeningAlreadyPosted(env: Env, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<boolean> {
+  return lawyerResponseMessageEventExists(env, detail, space, LAWYER_RESPONSE_OPENING_POSTED_EVENT);
 }
 
 async function ensureLawyerResponseDetailsPosted(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<void> {
@@ -1328,9 +1396,13 @@ async function ensureLawyerResponseDetailsPosted(env: Env, ctx: AuthContext, det
 }
 
 async function lawyerResponseDetailsAlreadyPosted(env: Env, detail: ServiceRequestDetail, space: LawyerResponseSpace): Promise<boolean> {
+  return lawyerResponseMessageEventExists(env, detail, space, LAWYER_RESPONSE_DETAILS_POSTED_EVENT);
+}
+
+async function lawyerResponseMessageEventExists(env: Env, detail: ServiceRequestDetail, space: LawyerResponseSpace, eventType: string): Promise<boolean> {
   const channelId = lawyerResponseSpaceChannelId(space);
   for (const event of detail.events) {
-    if (event.eventType !== LAWYER_RESPONSE_DETAILS_POSTED_EVENT) continue;
+    if (event.eventType !== eventType) continue;
     const responseThreadId = metadataString(event.metadata, "responseThreadId");
     const responseChannelId = metadataString(event.metadata, "responseChannelId");
     if (validDiscordId(channelId) && (responseThreadId === channelId || responseChannelId === channelId)) return true;
@@ -1346,7 +1418,7 @@ async function lawyerResponseDetailsAlreadyPosted(env: Env, detail: ServiceReque
        )
      LIMIT 1`
   )
-    .bind(detail.id, LAWYER_RESPONSE_DETAILS_POSTED_EVENT, channelId, channelId)
+    .bind(detail.id, eventType, channelId, channelId)
     .first<{ id: string }>();
   return Boolean(row?.id);
 }
@@ -1358,7 +1430,7 @@ async function postLawyerResponseDetailsEmbeds(env: Env, channelId: string, embe
       method: "POST",
       body: JSON.stringify({
         embeds: [embed],
-        allowed_mentions: { parse: [], users: [], roles: [] }
+        allowed_mentions: { parse: [] }
       })
     });
     if (!response.ok) throw new Error(`Discord lawyer private details post failed with ${response.status}: ${await responseTextSnippet(response)}`);
@@ -1392,7 +1464,7 @@ function lawyerResponseDetailsEmbeds(env: Env, detail: ServiceRequestDetail): La
     });
   }
 
-  const title = truncate(`Private Request Details — ${detail.requestNumber}`, 256);
+  const title = truncate(`Private Request Details \u2014 ${detail.requestNumber}`, 256);
   const chunks = chunkLawyerEmbedFields(fields);
   return chunks.map((chunk, index) => ({
     title: index === 0 ? title : truncate(`${title} (continued)`, 256),
@@ -1540,7 +1612,7 @@ async function postPublicLawyerClaimNotice(env: Env, detail: ServiceRequestDetai
     method: "POST",
     body: JSON.stringify({
       content: `${detail.requestNumber} has been picked up by an attorney. Private response space opened.`,
-      allowed_mentions: { parse: [], users: [], roles: [] }
+      allowed_mentions: { parse: [] }
     })
   });
   if (!response.ok) throw new Error(`Discord lawyer claim notice failed with ${response.status}: ${await responseTextSnippet(response)}`);
@@ -1808,15 +1880,31 @@ async function putTicketPermissionOverwrite(env: Env, channelId: string, overwri
   if (!response.ok) throw new Error(`Discord permission overwrite failed with ${response.status}: ${await responseTextSnippet(response)}`);
 }
 
-async function postTicketMessage(env: Env, channelId: string, content: string, mentions: { users?: string[]; roles?: string[] }): Promise<void> {
+async function postTicketMessage(env: Env, channelId: string, content: string, mentions: { users?: string[]; roles?: string[] }): Promise<string | null> {
   const response = await discordApi(env, `/channels/${channelId}/messages`, {
     method: "POST",
     body: JSON.stringify({
       content: truncate(content, 1900),
-      allowed_mentions: { parse: [], users: mentions.users ?? [], roles: mentions.roles ?? [] }
+      allowed_mentions: safeAllowedMentions(mentions)
     })
   });
   if (!response.ok) throw new Error(`Discord ticket message post failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  const message = await response.json().catch(() => ({})) as { id?: unknown };
+  return typeof message.id === "string" ? message.id : null;
+}
+
+function safeAllowedMentions(mentions: { users?: string[]; roles?: string[] }): { parse: string[]; users?: string[]; roles?: string[] } {
+  const users = uniqueValidDiscordIds(mentions.users);
+  const roles = uniqueValidDiscordIds(mentions.roles);
+  return {
+    parse: [],
+    ...(users.length ? { users } : {}),
+    ...(roles.length ? { roles } : {})
+  };
+}
+
+function uniqueValidDiscordIds(values: string[] | undefined): string[] {
+  return [...new Set((values ?? []).filter(validDiscordId))];
 }
 
 function withReason(message: string, reason: string): string {

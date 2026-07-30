@@ -919,7 +919,7 @@ async function recordPdHighCommandAutoAccess(env: Env, ctx: AuthContext, detail:
       method: "POST",
       body: JSON.stringify({
         content: message,
-        allowed_mentions: { parse: [], users: [], roles: [] }
+        allowed_mentions: { parse: [] }
       })
     });
     if (!response.ok) throw new Error(`Discord PD High Command note failed with ${response.status}`);
@@ -1213,7 +1213,7 @@ async function postJudgeAssignmentPing(env: Env, detail: ServiceRequestDetail, j
     method: "POST",
     body: JSON.stringify({
       content: `<@${judgeDiscordId}> you have been assigned to ${detail.requestNumber}.`,
-      allowed_mentions: { parse: [], users: [judgeDiscordId], roles: [] }
+      allowed_mentions: { parse: [], users: [judgeDiscordId] }
     })
   });
   if (!response.ok) throw new Error(`Discord judge assignment ping failed with ${response.status}`);
