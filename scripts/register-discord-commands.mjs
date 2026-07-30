@@ -1,13 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 
 loadDotDevVars();
+loadWranglerVars();
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
 
-if (!token || !clientId || !guildId) {
-  console.error("Missing DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, or DISCORD_GUILD_ID.");
+const missingEnv = [
+  ["DISCORD_BOT_TOKEN", token],
+  ["DISCORD_CLIENT_ID", clientId],
+  ["DISCORD_GUILD_ID", guildId]
+].filter(([, value]) => !value).map(([key]) => key);
+
+if (missingEnv.length) {
+  console.error(`Missing required Discord env value(s): ${missingEnv.join(", ")}.`);
   process.exit(1);
 }
 
@@ -31,6 +38,20 @@ const entityChoices = [
   ["Bar Exam Version", "bar_exam_version"],
   ["Judicial Record", "judicial_record"]
 ].map(([name, value]) => ({ name, value }));
+
+const categoryVisibilityChoices = [
+  ["Public", "public"],
+  ["Staff only", "staff_only"],
+  ["Private roles", "private_roles"],
+  ["Private users and roles", "private_users_and_roles"]
+];
+
+const mentionChoices = [
+  ["None", "none"],
+  ["Everyone", "everyone"],
+  ["Here", "here"],
+  ["Role", "role"]
+];
 
 const commands = [
   { name: "help", description: "Show public DOJ Portal help." },
@@ -70,6 +91,164 @@ const commands = [
       stringOption("linked_request", "Request number or ID.", false),
       stringOption("location", "Location/public note.", false),
       boolOption("publish", "Publish to public docket immediately.", false)
+    ]
+  },
+  {
+    name: "create-channel",
+    description: "Create a DOJ Discord text channel.",
+    options: [
+      stringOption("name", "Channel name.", true),
+      channelOption("category", "Optional parent category.", false, [4]),
+      stringOption("topic", "Optional channel topic.", false),
+      stringOption("reason", "Optional audit reason.", false),
+      stringOption("allowed_roles", "Comma-separated role IDs or mentions to allow.", false),
+      stringOption("denied_roles", "Comma-separated role IDs or mentions to deny.", false),
+      boolOption("staff_only", "Deny everyone and allow configured staff roles.", false)
+    ]
+  },
+  {
+    name: "create-private-channel",
+    description: "Create a private DOJ Discord text channel.",
+    options: [
+      stringOption("name", "Channel name.", true),
+      channelOption("category", "Optional parent category.", false, [4]),
+      stringOption("users", "Comma-separated user IDs or mentions to allow.", false),
+      stringOption("roles", "Comma-separated role IDs or mentions to allow.", false),
+      stringOption("topic", "Optional channel topic.", false),
+      stringOption("reason", "Optional audit reason.", false)
+    ]
+  },
+  {
+    name: "create-category",
+    description: "Create a DOJ Discord category.",
+    options: [
+      stringOption("name", "Category name.", true),
+      choiceOption("visibility", "Default category visibility.", categoryVisibilityChoices, true),
+      stringOption("roles", "Comma-separated role IDs or mentions to allow.", false),
+      stringOption("users", "Comma-separated user IDs or mentions to allow.", false),
+      stringOption("purpose", "Optional category purpose for audit logs.", false),
+      stringOption("reason", "Optional audit reason.", false)
+    ]
+  },
+  {
+    name: "create-category-layout",
+    description: "Create a category and several text channels.",
+    options: [
+      stringOption("category_name", "Category name.", true),
+      choiceOption("visibility", "Default category visibility.", categoryVisibilityChoices, true),
+      stringOption("channels", "Channel names separated by lines, commas, or numbers.", true),
+      stringOption("purpose", "Purpose posted in each created channel.", true),
+      stringOption("roles", "Comma-separated role IDs or mentions to allow.", false),
+      stringOption("users", "Comma-separated user IDs or mentions to allow.", false),
+      stringOption("reason", "Optional audit reason.", false)
+    ]
+  },
+  {
+    name: "delete-category-layout",
+    description: "Delete a category and optionally its child channels.",
+    options: [
+      channelOption("category", "Category to delete.", true, [4]),
+      boolOption("delete_channels", "Delete child channels before deleting category.", true),
+      stringOption("confirm", "DELETE CATEGORY or DELETE CATEGORY AND CHANNELS.", true),
+      stringOption("reason", "Optional audit reason.", false)
+    ]
+  },
+  {
+    name: "bulk-delete-channels",
+    description: "Delete up to 20 text channels by ID or mention.",
+    options: [
+      stringOption("channels", "Comma-separated channel IDs or mentions.", true),
+      stringOption("confirm", "Must equal DELETE CHANNELS.", true),
+      stringOption("reason", "Optional audit reason.", false)
+    ]
+  },
+  {
+    name: "kick",
+    description: "Kick a Discord member as authorized staff.",
+    options: [
+      userOption("user", "Member to kick.", true),
+      stringOption("reason", "Required moderation reason.", true)
+    ]
+  },
+  {
+    name: "ban",
+    description: "Ban a Discord user as authorized staff.",
+    options: [
+      userOption("user", "User to ban.", true),
+      stringOption("reason", "Required moderation reason.", true),
+      integerOption("delete_message_days", "Prior message days to delete, 0 through 7.", false, 0, 7)
+    ]
+  },
+  {
+    name: "unban",
+    description: "Unban a Discord user by ID.",
+    options: [
+      stringOption("user_id", "Discord user ID to unban.", true),
+      stringOption("reason", "Required moderation reason.", true)
+    ]
+  },
+  {
+    name: "timeout",
+    description: "Apply a Discord timeout to a member.",
+    options: [
+      userOption("user", "Member to time out.", true),
+      stringOption("duration", "Duration like 10m, 1h, 24h, 3d, or 7d.", true),
+      stringOption("reason", "Required moderation reason.", true)
+    ]
+  },
+  {
+    name: "untimeout",
+    description: "Remove a Discord timeout from a member.",
+    options: [
+      userOption("user", "Member to remove timeout from.", true),
+      stringOption("reason", "Required moderation reason.", true)
+    ]
+  },
+  {
+    name: "mute",
+    description: "Mute a member using the mute role or Discord timeout.",
+    options: [
+      userOption("user", "Member to mute.", true),
+      stringOption("reason", "Required moderation reason.", true),
+      stringOption("duration", "Optional duration like 10m, 1h, 24h, 3d, or 7d.", false)
+    ]
+  },
+  {
+    name: "unmute",
+    description: "Remove the mute role or timeout from a member.",
+    options: [
+      userOption("user", "Member to unmute.", true),
+      stringOption("reason", "Required moderation reason.", true)
+    ]
+  },
+  {
+    name: "warn",
+    description: "Record and DM a moderation warning.",
+    options: [
+      userOption("user", "User to warn.", true),
+      stringOption("reason", "Required warning reason.", true),
+      boolOption("public", "Also post a brief staff-safe notice here.", false)
+    ]
+  },
+  {
+    name: "mod-note",
+    description: "Record an internal moderation note.",
+    options: [
+      userOption("user", "User the note concerns.", true),
+      stringOption("note", "Internal moderation note.", true)
+    ]
+  },
+  {
+    name: "announce",
+    description: "Post a controlled announcement to a channel.",
+    options: [
+      channelOption("channel", "Text or announcement channel to post in.", true, [0, 5]),
+      stringOption("message", "Announcement message.", true),
+      stringOption("title", "Optional embed title.", false),
+      choiceOption("mention", "Optional controlled mention.", mentionChoices, false),
+      roleOption("role", "Role to mention when mention is role.", false),
+      boolOption("pin", "Pin the announcement after posting.", false),
+      stringOption("reason", "Optional audit reason.", false)
     ]
   },
   lookupCommand("lookup-request", "Lookup a DOJ service request."),
@@ -170,6 +349,21 @@ function roleOption(name, description, required) {
   return { type: 8, name, description, required };
 }
 
+function channelOption(name, description, required, channelTypes) {
+  return { type: 7, name, description, required, channel_types: channelTypes };
+}
+
+function integerOption(name, description, required, minValue, maxValue) {
+  return {
+    type: 4,
+    name,
+    description,
+    required,
+    ...(Number.isInteger(minValue) ? { min_value: minValue } : {}),
+    ...(Number.isInteger(maxValue) ? { max_value: maxValue } : {})
+  };
+}
+
 function boolOption(name, description, required) {
   return { type: 5, name, description, required };
 }
@@ -215,6 +409,30 @@ function loadDotDevVars() {
     if (!match) continue;
     const [, key, rawValue] = match;
     if (process.env[key]) continue;
-    process.env[key] = rawValue.replace(/^"|"$/g, "");
+    process.env[key] = stripQuotes(rawValue);
   }
+}
+
+function loadWranglerVars() {
+  if (!existsSync("wrangler.toml")) return;
+  const text = readFileSync("wrangler.toml", "utf8");
+  let inVars = false;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (/^\[/.test(trimmed)) {
+      inVars = trimmed === "[vars]";
+      continue;
+    }
+    if (!inVars) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    if (process.env[key]) continue;
+    process.env[key] = stripQuotes(rawValue);
+  }
+}
+
+function stripQuotes(value) {
+  return value.trim().replace(/^"|"$/g, "");
 }

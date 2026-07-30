@@ -42,7 +42,12 @@ export const discordChannelMappingsSeed = [
   ["REQUEST_EXPUNGEMENT", "", "Expungement request intake"],
   ["REQUEST_MARRIAGE", "", "Marriage request intake"],
   ["REQUEST_DIVORCE", "", "Divorce request intake"],
-  ["ADMIN_LOG", "", "Administrative audit channel"]
+  ["ADMIN_LOG", "", "Administrative audit channel"],
+  ["ADMIN_LOG_CHANNEL_ID", "", "Optional admin action log channel for Discord bot commands"],
+  ["DISCORD_ADMIN_LOG_CHANNEL_ID", "", "General fallback Discord admin log channel"],
+  ["MOD_LOG_CHANNEL_ID", "", "Optional moderation action log channel for Discord bot commands"],
+  ["MESSAGE_LOG_CHANNEL_ID", "", "Reserved for future Gateway deleted/edited message logging"],
+  ["MEMBER_LOG_CHANNEL_ID", "", "Reserved for future Gateway member join/leave logging"]
 ] as const;
 
 export const discordCategoryMappingsSeed = [

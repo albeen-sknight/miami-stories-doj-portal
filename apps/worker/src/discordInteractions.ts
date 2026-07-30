@@ -25,7 +25,7 @@ import { postLawyerSticky, postServiceRequestEmbedToPrivateTicket } from "./serv
 import { discordApi, fetchBotUser, fetchGuildMember, requireEnv } from "./discord";
 import { CASE_TYPE_PREFIX, docketSuggestionFromRequest } from "./docketDefinitions";
 import { errorJson } from "./http";
-import { deriveActionPermissions, hasActionPermission, PermissionError, requireAnyPermission, requirePermission } from "./permissions";
+import { hasActionPermission, isActionPermission, isLogicalPermission, mergeActionPermissions, PermissionError, requireAnyPermission, requirePermission } from "./permissions";
 import { serviceDefinition } from "./serviceDefinitions";
 import { softDeleteEntityForContext, restoreEntityForContext, type DeletionEntityType } from "./deletionLog";
 import { appendTranscriptSystemEvent, fetchChannelTranscriptEntries, transcriptSystemEvent } from "./ticketTranscriptCapture";
@@ -41,10 +41,42 @@ const READ_HISTORY = 65536n;
 const MANAGE_CHANNELS = 16n;
 const MANAGE_ROLES = 268435456n;
 const GUILD_TEXT_CHANNEL = 0;
+const GUILD_CATEGORY_CHANNEL = 4;
 const ANNOUNCEMENT_THREAD = 10;
 const PUBLIC_THREAD = 11;
 const PRIVATE_THREAD = 12;
+const CHANNEL_ACCESS_ALLOW = VIEW_CHANNEL | SEND_MESSAGES | READ_HISTORY;
+const MAX_LAYOUT_CHANNELS = 20;
+const SAFE_LAYOUT_CHANNELS = 10;
+const MAX_BULK_DELETE_CHANNELS = 20;
+const DISCORD_TIMEOUT_MAX_SECONDS = 28 * 24 * 60 * 60;
 const TICKET_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_REQUESTS", "ADMIN"];
+const DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_DISCORD_CHANNELS", "ADMIN"];
+const DISCORD_MODERATION_PERMISSIONS: ActionPermission[] = ["MANAGE_DISCORD_MODERATION", "ADMIN"];
+const DISCORD_ANNOUNCEMENT_PERMISSIONS: ActionPermission[] = ["MANAGE_ANNOUNCEMENTS", "MANAGE_DISCORD_CHANNELS", "ADMIN"];
+const DISCORD_STAFF_ROLE_PERMISSION_KEYS = [
+  "ADMIN",
+  "CHIEF_JUSTICE",
+  "JUSTICE",
+  "JUDGE",
+  "PROSECUTOR",
+  "MANAGE_REQUESTS",
+  "MANAGE_DISCORD_CHANNELS",
+  "MANAGE_DISCORD_MODERATION",
+  "MANAGE_DISCORD_LOGS"
+] as const;
+// Message/member event logging needs a Discord Gateway listener; this Worker only receives interactions.
+const PROTECTED_CATEGORY_MAPPING_KEYS = [
+  "CRIMINAL_TRIALS_CATEGORY",
+  "CIVIL_CASES_CATEGORY",
+  "SUBPOENAS_CATEGORY",
+  "WARRANTS_CATEGORY",
+  "EXPUNGEMENTS_CATEGORY",
+  "MARRIAGE_DIVORCE_CATEGORY",
+  "BAR_EXAM_FOLLOWUP_CATEGORY",
+  "REQUEST_LAWYER_CATEGORY",
+  "LAWYER_REQUESTS_CATEGORY"
+] as const;
 const LAWYER_RESPONSE_EVENT_TYPES = ["LAWYER_RESPONSE_CLAIMED", "LAWYER_RESPONSE_THREAD_CREATED_BY_STAFF"] as const;
 const LAWYER_RESPONSE_OPENING_POSTED_EVENT = "LAWYER_RESPONSE_OPENING_POSTED";
 const LAWYER_RESPONSE_PANEL_POSTED_EVENT = "LAWYER_RESPONSE_PANEL_POSTED";
@@ -613,6 +645,9 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
           "`/create-docket`, `/lookup-request`, `/lookup-docket`, `/lookup-bar-attempt`",
           "`/close`, `/close-ticket`, `/transcript-ticket`, `/delete-ticket`",
           "`/add-user`, `/add-role`, `/rename-ticket`, `/claim-ticket`, `/unclaim-ticket`",
+          "`/create-channel`, `/create-private-channel`, `/create-category`, `/create-category-layout`",
+          "`/delete-category-layout`, `/bulk-delete-channels`, `/announce`",
+          "`/kick`, `/ban`, `/unban`, `/timeout`, `/untimeout`, `/mute`, `/unmute`, `/warn`, `/mod-note`",
           "`/claim-lawyer-request`, `/lawyer-thread`",
           "`/delete-record`, `/restore-record`",
           "`/post-faq`, `/post-faq-category`, `/post-resources`, `/post-lawyer-sticky`"
@@ -625,6 +660,38 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
       return requestService(env, ctx, options);
     case "create-docket":
       return createDocketFromDiscord(env, ctx, options);
+    case "create-channel":
+      return createChannelCommand(env, ctx, interaction, options);
+    case "create-private-channel":
+      return createPrivateChannelCommand(env, ctx, interaction, options);
+    case "create-category":
+      return createCategoryCommand(env, ctx, interaction, options);
+    case "create-category-layout":
+      return createCategoryLayoutCommand(env, ctx, interaction, options);
+    case "delete-category-layout":
+      return deleteCategoryLayoutCommand(env, ctx, interaction, options);
+    case "bulk-delete-channels":
+      return bulkDeleteChannelsCommand(env, ctx, interaction, options);
+    case "kick":
+      return kickCommand(env, ctx, interaction, options);
+    case "ban":
+      return banCommand(env, ctx, interaction, options);
+    case "unban":
+      return unbanCommand(env, ctx, interaction, options);
+    case "timeout":
+      return timeoutCommand(env, ctx, interaction, options);
+    case "untimeout":
+      return untimeoutCommand(env, ctx, interaction, options);
+    case "mute":
+      return muteCommand(env, ctx, interaction, options);
+    case "unmute":
+      return unmuteCommand(env, ctx, interaction, options);
+    case "warn":
+      return warnCommand(env, ctx, interaction, options);
+    case "mod-note":
+      return modNoteCommand(env, ctx, interaction, options);
+    case "announce":
+      return announceCommand(env, ctx, interaction, options);
     case "close":
       return closeTicket(env, ctx, interaction, options);
     case "lookup-request":
@@ -758,6 +825,432 @@ async function createDocketFromDiscord(env: Env, ctx: AuthContext, options: Map<
   ).run();
   await audit(env, "DOCKET_CREATED_FROM_DISCORD", { docket_id: id, docket_number: docketNumber }, ctx.user.id);
   return messageResponse(`Docket created: **${docketNumber}**${isPublic ? " and marked public." : "."}`, true);
+}
+
+async function createChannelCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const name = sanitizeDiscordChannelName(stringOption(options, "name"));
+  if (!name) return messageResponse("Channel name must include at least one letter or number.", true);
+  const categoryId = optionalDiscordIdOption(options, "category");
+  const allowedRoles = parseIdList(stringOption(options, "allowed_roles"), "role");
+  const deniedRoles = parseIdList(stringOption(options, "denied_roles"), "role");
+  const validation = idListError(allowedRoles, "allowed_roles") || idListError(deniedRoles, "denied_roles");
+  if (validation) return messageResponse(validation, true);
+  const staffOnly = booleanOption(options, "staff_only", false);
+  const staffRoles = staffOnly ? await configuredStaffRoleIds(env) : [];
+  const overwrites = channelOverwrites(guildId, {
+    everyoneDenied: staffOnly,
+    roleAllowIds: [...staffRoles, ...allowedRoles.ids],
+    roleDenyIds: deniedRoles.ids
+  });
+  const channel = await createGuildChannel(env, guildId, {
+    name,
+    type: GUILD_TEXT_CHANNEL,
+    topic: cleanTextOption(options, "topic", 1024) || undefined,
+    parent_id: categoryId || undefined,
+    permission_overwrites: overwrites.length ? overwrites : undefined
+  }, cleanTextOption(options, "reason", 512));
+  await recordDiscordAdminAction(env, ctx, "CHANNEL_CREATED", "channel", channel.id, `Created channel #${channel.name ?? name}.`, {
+    channel_id: channel.id,
+    channel_name: channel.name ?? name,
+    category_id: categoryId || null,
+    staff_only: staffOnly,
+    allowed_role_ids: allowedRoles.ids,
+    denied_role_ids: deniedRoles.ids,
+    reason: cleanTextOption(options, "reason", 512) || null
+  }, "ADMIN");
+  return messageResponse(`Created channel <#${channel.id}>.`, true);
+}
+
+async function createPrivateChannelCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const name = sanitizeDiscordChannelName(stringOption(options, "name"));
+  if (!name) return messageResponse("Channel name must include at least one letter or number.", true);
+  const users = parseIdList(stringOption(options, "users"), "user");
+  const roles = parseIdList(stringOption(options, "roles"), "role");
+  const validation = idListError(users, "users") || idListError(roles, "roles");
+  if (validation) return messageResponse(validation, true);
+  const categoryId = optionalDiscordIdOption(options, "category");
+  const staffRoles = await configuredStaffRoleIds(env);
+  const channel = await createGuildChannel(env, guildId, {
+    name,
+    type: GUILD_TEXT_CHANNEL,
+    topic: cleanTextOption(options, "topic", 1024) || undefined,
+    parent_id: categoryId || undefined,
+    permission_overwrites: channelOverwrites(guildId, {
+      everyoneDenied: true,
+      userAllowIds: users.ids,
+      roleAllowIds: [...staffRoles, ...roles.ids]
+    })
+  }, cleanTextOption(options, "reason", 512));
+  await recordDiscordAdminAction(env, ctx, "PRIVATE_CHANNEL_CREATED", "channel", channel.id, `Created private channel #${channel.name ?? name}.`, {
+    channel_id: channel.id,
+    channel_name: channel.name ?? name,
+    category_id: categoryId || null,
+    user_ids: users.ids,
+    role_ids: roles.ids,
+    staff_role_ids: staffRoles,
+    reason: cleanTextOption(options, "reason", 512) || null
+  }, "ADMIN");
+  return messageResponse(`Created private channel <#${channel.id}>.`, true);
+}
+
+async function createCategoryCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const name = sanitizeDiscordChannelName(stringOption(options, "name"));
+  if (!name) return messageResponse("Category name must include at least one letter or number.", true);
+  const visibility = normalizeCategoryVisibility(stringOption(options, "visibility"));
+  if (!visibility) return messageResponse("Choose a valid visibility: public, staff_only, private_roles, or private_users_and_roles.", true);
+  const users = parseIdList(stringOption(options, "users"), "user");
+  const roles = parseIdList(stringOption(options, "roles"), "role");
+  const validation = idListError(users, "users") || idListError(roles, "roles") || categoryVisibilityError(visibility, users.ids, roles.ids);
+  if (validation) return messageResponse(validation, true);
+  const category = await createGuildChannel(env, guildId, {
+    name,
+    type: GUILD_CATEGORY_CHANNEL,
+    permission_overwrites: await categoryPermissionOverwrites(env, guildId, visibility, users.ids, roles.ids)
+  }, cleanTextOption(options, "reason", 512));
+  await recordDiscordAdminAction(env, ctx, "CATEGORY_CREATED", "category", category.id, `Created category ${category.name ?? name}.`, {
+    category_id: category.id,
+    category_name: category.name ?? name,
+    visibility,
+    user_ids: users.ids,
+    role_ids: roles.ids,
+    purpose: cleanTextOption(options, "purpose", 1000) || null,
+    reason: cleanTextOption(options, "reason", 512) || null
+  }, "ADMIN");
+  return messageResponse(`Created category **${category.name ?? name}** (${category.id}).`, true);
+}
+
+async function createCategoryLayoutCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const categoryName = sanitizeDiscordChannelName(stringOption(options, "category_name"));
+  if (!categoryName) return messageResponse("Category name must include at least one letter or number.", true);
+  const visibility = normalizeCategoryVisibility(stringOption(options, "visibility"));
+  if (!visibility) return messageResponse("Choose a valid visibility: public, staff_only, private_roles, or private_users_and_roles.", true);
+  const purpose = cleanTextOption(options, "purpose", 1000);
+  if (!purpose) return messageResponse("Purpose is required for a category layout.", true);
+  const users = parseIdList(stringOption(options, "users"), "user");
+  const roles = parseIdList(stringOption(options, "roles"), "role");
+  const validation = idListError(users, "users") || idListError(roles, "roles") || categoryVisibilityError(visibility, users.ids, roles.ids);
+  if (validation) return messageResponse(validation, true);
+  const parsedChannels = parseLayoutChannelNames(stringOption(options, "channels"));
+  if (parsedChannels.names.length === 0) return messageResponse("Provide at least one valid channel name.", true);
+  if (parsedChannels.names.length > MAX_LAYOUT_CHANNELS) return messageResponse(`This layout would create more than ${MAX_LAYOUT_CHANNELS} channels. Please split it into smaller batches.`, true);
+  if (parsedChannels.names.length > SAFE_LAYOUT_CHANNELS) return messageResponse("This layout would create more than 10 channels. Please split it into smaller batches.", true);
+  const category = await createGuildChannel(env, guildId, {
+    name: categoryName,
+    type: GUILD_CATEGORY_CHANNEL,
+    permission_overwrites: await categoryPermissionOverwrites(env, guildId, visibility, users.ids, roles.ids)
+  }, cleanTextOption(options, "reason", 512));
+  const created: DiscordCreatedChannel[] = [];
+  const failed: string[] = [];
+  for (const channelName of parsedChannels.names) {
+    try {
+      const channel = await createGuildChannel(env, guildId, {
+        name: channelName,
+        type: GUILD_TEXT_CHANNEL,
+        parent_id: category.id,
+        topic: purpose
+      }, cleanTextOption(options, "reason", 512));
+      created.push(channel);
+      await postDiscordChannelMessage(env, channel.id, `Purpose: ${truncate(purpose, 1000)}`, {});
+    } catch (cause) {
+      failed.push(`${channelName}: ${safeError(cause)}`);
+    }
+  }
+  await recordDiscordAdminAction(env, ctx, "CATEGORY_LAYOUT_CREATED", "category", category.id, `Created category layout ${category.name ?? categoryName} with ${created.length} channels.`, {
+    category_id: category.id,
+    category_name: category.name ?? categoryName,
+    channel_ids: created.map((channel) => channel.id),
+    skipped_names: parsedChannels.skipped,
+    failed,
+    visibility,
+    role_ids: roles.ids,
+    user_ids: users.ids,
+    purpose,
+    reason: cleanTextOption(options, "reason", 512) || null
+  }, "ADMIN");
+  return messageResponse([
+    `Created category **${category.name ?? categoryName}** (${category.id}).`,
+    `Created channels: ${created.length ? created.map((channel) => `<#${channel.id}>`).join(", ") : "none"}.`,
+    roles.ids.length ? `Roles granted: ${roles.ids.map((id) => `<@&${id}>`).join(", ")}` : null,
+    users.ids.length ? `Users granted: ${users.ids.map((id) => `<@${id}>`).join(", ")}` : null,
+    parsedChannels.skipped.length ? `Skipped invalid names: ${parsedChannels.skipped.join(", ")}` : null,
+    failed.length ? `Failures: ${truncate(failed.join("; "), 500)}` : null
+  ].filter(Boolean).join("\n"), true);
+}
+
+async function deleteCategoryLayoutCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const categoryId = optionalDiscordIdOption(options, "category");
+  if (!categoryId) return messageResponse("Category must be a valid Discord category ID.", true);
+  const deleteChannels = booleanOption(options, "delete_channels", false);
+  const expectedConfirm = deleteChannels ? "DELETE CATEGORY AND CHANNELS" : "DELETE CATEGORY";
+  if (stringOption(options, "confirm") !== expectedConfirm) return messageResponse(`Confirmation must exactly equal: ${expectedConfirm}`, true);
+  const protectedIds = await protectedDiscordCategoryIds(env);
+  if (protectedIds.has(categoryId)) return messageResponse("That category is protected and cannot be deleted by this command.", true);
+  const category = await fetchDiscordChannel(env, categoryId);
+  if (category.type !== GUILD_CATEGORY_CHANNEL) return messageResponse("That ID is not a Discord category.", true);
+  const children = (await fetchGuildChannels(env, guildId)).filter((channel) => channel.parent_id === categoryId);
+  if (!deleteChannels && children.length > 0) return messageResponse(`Category has ${children.length} child channels. Set delete_channels true and use the stronger confirmation phrase if you intend to delete them.`, true);
+  if (deleteChannels && children.length > MAX_BULK_DELETE_CHANNELS) return messageResponse(`This category has more than ${MAX_BULK_DELETE_CHANNELS} child channels. Split the cleanup into smaller batches.`, true);
+  const reason = cleanTextOption(options, "reason", 512) || "Deleted by DOJ Discord admin command.";
+  const deletedChildren: string[] = [];
+  for (const child of children) {
+    await deleteDiscordChannel(env, child.id, reason);
+    deletedChildren.push(child.id);
+    await recordDiscordAdminAction(env, ctx, "CHANNEL_DELETED", "channel", child.id, `Deleted child channel ${child.name ?? child.id}.`, {
+      channel_id: child.id,
+      channel_name: child.name ?? null,
+      parent_id: categoryId,
+      reason
+    }, "ADMIN");
+  }
+  await deleteDiscordChannel(env, categoryId, reason);
+  await recordDiscordAdminAction(env, ctx, "CATEGORY_DELETED", "category", categoryId, `Deleted category ${category.name ?? categoryId}.`, {
+    category_id: categoryId,
+    category_name: category.name ?? null,
+    delete_channels: deleteChannels,
+    deleted_child_channel_ids: deletedChildren,
+    reason
+  }, "ADMIN");
+  return messageResponse(`Deleted category **${category.name ?? categoryId}**.${deletedChildren.length ? ` Deleted ${deletedChildren.length} child channels first.` : ""}`, true);
+}
+
+async function bulkDeleteChannelsCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_CHANNEL_MANAGEMENT_PERMISSIONS);
+  requireGuildInteraction(env, interaction);
+  if (stringOption(options, "confirm") !== "DELETE CHANNELS") return messageResponse("Confirmation must exactly equal: DELETE CHANNELS", true);
+  const parsed = parseIdList(stringOption(options, "channels"), "channel");
+  const validation = idListError(parsed, "channels");
+  if (validation) return messageResponse(validation, true);
+  if (parsed.ids.length === 0) return messageResponse("Provide at least one valid channel ID or mention.", true);
+  if (parsed.ids.length > MAX_BULK_DELETE_CHANNELS) return messageResponse(`You can delete at most ${MAX_BULK_DELETE_CHANNELS} channels per command.`, true);
+  const protectedIds = await protectedDiscordCategoryIds(env);
+  const channels = await Promise.all(parsed.ids.map((id) => fetchDiscordChannel(env, id)));
+  const blocked = channels.find((channel) => channel.type === GUILD_CATEGORY_CHANNEL || protectedIds.has(channel.parent_id ?? "") || protectedIds.has(channel.id));
+  if (blocked) return messageResponse(`Refusing to bulk-delete protected/category channel ${blocked.name ?? blocked.id}. Use the category delete command for categories.`, true);
+  const reason = cleanTextOption(options, "reason", 512) || "Bulk deleted by DOJ Discord admin command.";
+  const deleted: string[] = [];
+  for (const channel of channels) {
+    await deleteDiscordChannel(env, channel.id, reason);
+    deleted.push(channel.id);
+    await recordDiscordAdminAction(env, ctx, "CHANNEL_DELETED", "channel", channel.id, `Bulk-deleted channel ${channel.name ?? channel.id}.`, {
+      channel_id: channel.id,
+      channel_name: channel.name ?? null,
+      reason
+    }, "ADMIN");
+  }
+  return messageResponse(`Deleted ${deleted.length} channels: ${deleted.map((id) => `\`${id}\``).join(", ")}`, true);
+}
+
+async function kickCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 512);
+  if (!targetId || !reason) return messageResponse("User and reason are required.", true);
+  const hierarchy = await ensureModerationHierarchy(env, ctx, interaction, targetId, "kick", true);
+  if (!hierarchy.ok) return messageResponse(hierarchy.message, true);
+  await dmUser(env, targetId, `You were kicked from Miami Stories DOJ Discord.\nReason: ${reason}`);
+  const response = await discordApi(env, `/guilds/${guildId}/members/${targetId}`, {
+    method: "DELETE",
+    headers: { "X-Audit-Log-Reason": discordAuditReason(reason) }
+  });
+  if (!response.ok) throw new Error(`Discord kick failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  await recordModerationCase(env, ctx, guildId, targetId, "KICK", reason, null, null, {});
+  await recordDiscordAdminAction(env, ctx, "KICK", "user", targetId, `Kicked <@${targetId}>.`, { target_user_id: targetId, reason }, "MOD");
+  return messageResponse(`Kicked <@${targetId}>.`, true);
+}
+
+async function banCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 512);
+  if (!targetId || !reason) return messageResponse("User and reason are required.", true);
+  const days = Math.max(0, Math.min(7, integerOption(options, "delete_message_days", 0)));
+  const hierarchy = await ensureModerationHierarchy(env, ctx, interaction, targetId, "ban", false);
+  if (!hierarchy.ok) return messageResponse(hierarchy.message, true);
+  await dmUser(env, targetId, `You were banned from Miami Stories DOJ Discord.\nReason: ${reason}`);
+  const response = await discordApi(env, `/guilds/${guildId}/bans/${targetId}`, {
+    method: "PUT",
+    headers: { "X-Audit-Log-Reason": discordAuditReason(reason) },
+    body: JSON.stringify({ delete_message_seconds: days * 24 * 60 * 60 })
+  });
+  if (!response.ok) throw new Error(`Discord ban failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  await recordModerationCase(env, ctx, guildId, targetId, "BAN", reason, null, null, { delete_message_days: days });
+  await recordDiscordAdminAction(env, ctx, "BAN", "user", targetId, `Banned <@${targetId}>.`, { target_user_id: targetId, reason, delete_message_days: days }, "MOD");
+  return messageResponse(`Banned <@${targetId}>.`, true);
+}
+
+async function unbanCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = stringOption(options, "user_id");
+  const reason = cleanTextOption(options, "reason", 512);
+  if (!validDiscordId(targetId) || !reason) return messageResponse("Valid user_id and reason are required.", true);
+  const response = await discordApi(env, `/guilds/${guildId}/bans/${targetId}`, {
+    method: "DELETE",
+    headers: { "X-Audit-Log-Reason": discordAuditReason(reason) }
+  });
+  if (!response.ok) throw new Error(`Discord unban failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  await recordModerationCase(env, ctx, guildId, targetId, "UNBAN", reason, null, null, {});
+  await recordDiscordAdminAction(env, ctx, "UNBAN", "user", targetId, `Unbanned Discord user ${targetId}.`, { target_user_id: targetId, reason }, "MOD");
+  return messageResponse(`Unbanned Discord user \`${targetId}\`.`, true);
+}
+
+async function timeoutCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 512);
+  const duration = parseDurationSeconds(stringOption(options, "duration"));
+  if (!targetId || !reason || !duration.ok) return messageResponse(duration.ok ? "User and reason are required." : duration.message, true);
+  const hierarchy = await ensureModerationHierarchy(env, ctx, interaction, targetId, "timeout", true);
+  if (!hierarchy.ok) return messageResponse(hierarchy.message, true);
+  const expiresAt = new Date(Date.now() + duration.seconds * 1000).toISOString();
+  await updateMemberTimeout(env, guildId, targetId, expiresAt, reason);
+  await dmUser(env, targetId, `You were timed out in Miami Stories DOJ Discord until ${expiresAt}.\nReason: ${reason}`);
+  await recordModerationCase(env, ctx, guildId, targetId, "TIMEOUT", reason, duration.seconds, expiresAt, {});
+  await recordDiscordAdminAction(env, ctx, "TIMEOUT", "user", targetId, `Timed out <@${targetId}> for ${duration.seconds} seconds.`, { target_user_id: targetId, reason, duration_seconds: duration.seconds, expires_at: expiresAt }, "MOD");
+  return messageResponse(`Timed out <@${targetId}> until ${expiresAt}.`, true);
+}
+
+async function untimeoutCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 512);
+  if (!targetId || !reason) return messageResponse("User and reason are required.", true);
+  const hierarchy = await ensureModerationHierarchy(env, ctx, interaction, targetId, "untimeout", true);
+  if (!hierarchy.ok) return messageResponse(hierarchy.message, true);
+  await updateMemberTimeout(env, guildId, targetId, null, reason);
+  await recordModerationCase(env, ctx, guildId, targetId, "UNTIMEOUT", reason, null, null, {});
+  await recordDiscordAdminAction(env, ctx, "UNTIMEOUT", "user", targetId, `Removed timeout from <@${targetId}>.`, { target_user_id: targetId, reason }, "MOD");
+  return messageResponse(`Removed timeout from <@${targetId}>.`, true);
+}
+
+async function muteCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 512);
+  if (!targetId || !reason) return messageResponse("User and reason are required.", true);
+  const hierarchy = await ensureModerationHierarchy(env, ctx, interaction, targetId, "mute", true);
+  if (!hierarchy.ok) return messageResponse(hierarchy.message, true);
+  const muteRoleId = await configuredMuteRoleId(env);
+  const durationText = stringOption(options, "duration");
+  const duration = durationText ? parseDurationSeconds(durationText) : { ok: true as const, seconds: 60 * 60 };
+  if (!duration.ok) return messageResponse(duration.message, true);
+  if (muteRoleId) {
+    const response = await discordApi(env, `/guilds/${guildId}/members/${targetId}/roles/${muteRoleId}`, {
+      method: "PUT",
+      headers: { "X-Audit-Log-Reason": discordAuditReason(reason) }
+    });
+    if (!response.ok) throw new Error(`Discord mute role apply failed with ${response.status}: ${await responseTextSnippet(response)}`);
+    await recordModerationCase(env, ctx, guildId, targetId, "MUTE", reason, durationText ? duration.seconds : null, null, { mute_role_id: muteRoleId, duration_auto_remove: false });
+    await recordDiscordAdminAction(env, ctx, "MUTE", "user", targetId, `Applied mute role to <@${targetId}>.`, { target_user_id: targetId, reason, mute_role_id: muteRoleId, duration_seconds: durationText ? duration.seconds : null }, "MOD");
+    return messageResponse(`Applied mute role to <@${targetId}>.${durationText ? " Duration was recorded, but role auto-removal requires a separate scheduled unmute workflow." : ""}`, true);
+  }
+  const expiresAt = new Date(Date.now() + duration.seconds * 1000).toISOString();
+  await updateMemberTimeout(env, guildId, targetId, expiresAt, reason);
+  await recordModerationCase(env, ctx, guildId, targetId, "MUTE_TIMEOUT", reason, duration.seconds, expiresAt, {});
+  await recordDiscordAdminAction(env, ctx, "MUTE_TIMEOUT", "user", targetId, `Muted <@${targetId}> by timeout.`, { target_user_id: targetId, reason, duration_seconds: duration.seconds, expires_at: expiresAt }, "MOD");
+  return messageResponse(`Muted <@${targetId}> by timeout until ${expiresAt}.`, true);
+}
+
+async function unmuteCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 512);
+  if (!targetId || !reason) return messageResponse("User and reason are required.", true);
+  const hierarchy = await ensureModerationHierarchy(env, ctx, interaction, targetId, "unmute", true);
+  if (!hierarchy.ok) return messageResponse(hierarchy.message, true);
+  const muteRoleId = await configuredMuteRoleId(env);
+  if (muteRoleId) {
+    const response = await discordApi(env, `/guilds/${guildId}/members/${targetId}/roles/${muteRoleId}`, {
+      method: "DELETE",
+      headers: { "X-Audit-Log-Reason": discordAuditReason(reason) }
+    });
+    if (!response.ok && response.status !== 404) throw new Error(`Discord mute role remove failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  } else {
+    await updateMemberTimeout(env, guildId, targetId, null, reason);
+  }
+  await recordModerationCase(env, ctx, guildId, targetId, "UNMUTE", reason, null, null, { mute_role_id: muteRoleId ?? null });
+  await recordDiscordAdminAction(env, ctx, "UNMUTE", "user", targetId, `Unmuted <@${targetId}>.`, { target_user_id: targetId, reason, mute_role_id: muteRoleId ?? null }, "MOD");
+  return messageResponse(`Unmuted <@${targetId}>.`, true);
+}
+
+async function warnCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const reason = cleanTextOption(options, "reason", 1000);
+  if (!targetId || !reason) return messageResponse("User and reason are required.", true);
+  const caseId = await recordModerationCase(env, ctx, guildId, targetId, "WARN", reason, null, null, {});
+  await dmUser(env, targetId, `You received a DOJ Discord warning.\nReason: ${reason}`);
+  if (booleanOption(options, "public", false) && interaction.channel_id) {
+    await postDiscordChannelMessage(env, interaction.channel_id, `<@${targetId}> has received a staff warning. Please check DMs and follow server rules.`, { users: [targetId] });
+  }
+  await recordDiscordAdminAction(env, ctx, "WARN", "user", targetId, `Warned <@${targetId}>.`, { target_user_id: targetId, case_id: caseId, public_notice: booleanOption(options, "public", false), reason }, "MOD");
+  return messageResponse(`Warning recorded for <@${targetId}>. Case: \`${caseId}\`.`, true);
+}
+
+async function modNoteCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_MODERATION_PERMISSIONS);
+  const guildId = requireGuildInteraction(env, interaction);
+  const targetId = snowflakeOption(options, "user");
+  const note = cleanTextOption(options, "note", 1000);
+  if (!targetId || !note) return messageResponse("User and note are required.", true);
+  const caseId = await recordModerationCase(env, ctx, guildId, targetId, "MOD_NOTE", note, null, null, { internal: true });
+  await recordDiscordAdminAction(env, ctx, "MOD_NOTE", "user", targetId, `Added internal moderation note for <@${targetId}>.`, { target_user_id: targetId, case_id: caseId }, "MOD");
+  return messageResponse(`Internal moderation note recorded for <@${targetId}>. Case: \`${caseId}\`.`, true);
+}
+
+async function announceCommand(env: Env, ctx: AuthContext, interaction: DiscordInteraction, options: Map<string, OptionValue>) {
+  requireAnyPermission(ctx, DISCORD_ANNOUNCEMENT_PERMISSIONS);
+  requireGuildInteraction(env, interaction);
+  const channelId = optionalDiscordIdOption(options, "channel");
+  const message = cleanTextOption(options, "message", 3900);
+  const title = cleanTextOption(options, "title", 256);
+  if (!channelId || !message) return messageResponse("Channel and message are required.", true);
+  const mentionMode = stringOption(options, "mention") || "none";
+  const roleId = snowflakeOption(options, "role");
+  const mention = announcementMention(ctx, mentionMode, roleId);
+  if (!mention.ok) return messageResponse(mention.message, true);
+  const content = [mention.content, title ? "" : message].filter(Boolean).join("\n");
+  const response = await discordApi(env, `/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: truncate(content, 2000),
+      allowed_mentions: mention.allowedMentions,
+      ...(title ? { embeds: [{ title, description: message }] } : {})
+    })
+  });
+  if (!response.ok) throw new Error(`Discord announcement failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  const posted = await response.json().catch(() => ({})) as { id?: string };
+  if (booleanOption(options, "pin", false) && posted.id) {
+    const pin = await discordApi(env, `/channels/${channelId}/pins/${posted.id}`, { method: "PUT" });
+    if (!pin.ok) throw new Error(`Discord announcement pin failed with ${pin.status}: ${await responseTextSnippet(pin)}`);
+  }
+  await recordDiscordAdminAction(env, ctx, "ANNOUNCEMENT_POSTED", "channel", channelId, `Posted announcement in <#${channelId}>.`, {
+    channel_id: channelId,
+    message_id: posted.id ?? null,
+    title: title || null,
+    mention: mentionMode,
+    role_id: roleId || null,
+    pinned: booleanOption(options, "pin", false),
+    reason: cleanTextOption(options, "reason", 512) || null
+  }, "ADMIN");
+  return messageResponse(`Announcement posted in <#${channelId}>.${posted.id ? ` Message ID: \`${posted.id}\`.` : ""}`, true);
 }
 
 async function lookupRequest(env: Env, ctx: AuthContext, options: Map<string, OptionValue>) {
@@ -2489,6 +2982,349 @@ function canOverrideTicketClaim(ctx: AuthContext): boolean {
   return hasActionPermission(ctx, "ADMIN") || hasActionPermission(ctx, "MANAGE_REQUESTS");
 }
 
+function requireGuildInteraction(env: Env, interaction: DiscordInteraction): string {
+  const guildId = requireEnv(env, "DISCORD_GUILD_ID");
+  if (!interaction.guild_id || interaction.guild_id !== guildId || !interaction.member?.user?.id) {
+    throw new PermissionError("GUILD_INTERACTION");
+  }
+  return guildId;
+}
+
+function cleanTextOption(options: Map<string, OptionValue>, key: string, max: number): string {
+  return truncate(stringOption(options, key).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim(), max);
+}
+
+function booleanOption(options: Map<string, OptionValue>, key: string, fallback = false): boolean {
+  const value = options.get(key);
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function integerOption(options: Map<string, OptionValue>, key: string, fallback = 0): number {
+  const value = options.get(key);
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : fallback;
+}
+
+function optionalDiscordIdOption(options: Map<string, OptionValue>, key: string): string {
+  const value = stringOption(options, key);
+  if (validDiscordId(value)) return value;
+  return extractDiscordId(value) ?? "";
+}
+
+function sanitizeDiscordChannelName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 90)
+    .replace(/-$/g, "");
+}
+
+function parseLayoutChannelNames(value: string): { names: string[]; skipped: string[] } {
+  const names: string[] = [];
+  const skipped: string[] = [];
+  for (const raw of value.split(/\r?\n|,/)) {
+    const trimmed = raw.trim().replace(/^(?:[-*]|\d+[.)-])\s*/, "");
+    if (!trimmed) continue;
+    const name = sanitizeDiscordChannelName(trimmed);
+    if (!name) skipped.push(truncate(trimmed, 60));
+    else if (!names.includes(name)) names.push(name);
+  }
+  return { names, skipped };
+}
+
+function parseIdList(value: string, _kind: "user" | "role" | "channel"): ParsedDiscordIds {
+  const rejectedBroad = /@everyone|@here/i.test(value);
+  const ids = [...new Set((value.match(/\d{17,20}/g) ?? []).filter(validDiscordId))];
+  const invalid = value
+    .split(/[\s,]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !/@everyone|@here/i.test(part) && !/\d{17,20}/.test(part));
+  return { ids, invalid, rejectedBroad };
+}
+
+function idListError(parsed: ParsedDiscordIds, field: string, guildId?: string): string | null {
+  if (parsed.rejectedBroad) return `${field} cannot include @everyone or @here.`;
+  if (guildId && parsed.ids.includes(guildId)) return `${field} cannot include the @everyone role.`;
+  if (parsed.invalid.length) return `${field} contains invalid entries: ${parsed.invalid.slice(0, 4).join(", ")}`;
+  return null;
+}
+
+function normalizeCategoryVisibility(value: string): DiscordCategoryVisibility | null {
+  return ["public", "staff_only", "private_roles", "private_users_and_roles"].includes(value)
+    ? value as DiscordCategoryVisibility
+    : null;
+}
+
+function categoryVisibilityError(visibility: DiscordCategoryVisibility, userIds: string[], roleIds: string[]): string | null {
+  if (visibility === "private_roles" && roleIds.length === 0) return "private_roles visibility requires at least one role.";
+  if (visibility === "private_users_and_roles" && roleIds.length === 0 && userIds.length === 0) return "private_users_and_roles visibility requires at least one user or role.";
+  return null;
+}
+
+async function categoryPermissionOverwrites(env: Env, guildId: string, visibility: DiscordCategoryVisibility, userIds: string[], roleIds: string[]): Promise<DiscordPermissionOverwriteInput[]> {
+  if (visibility === "public") return [];
+  const staffRoles = visibility === "staff_only" ? await configuredStaffRoleIds(env) : [];
+  return channelOverwrites(guildId, {
+    everyoneDenied: true,
+    userAllowIds: userIds,
+    roleAllowIds: visibility === "staff_only" ? staffRoles : roleIds
+  });
+}
+
+function channelOverwrites(guildId: string, input: { everyoneDenied?: boolean; userAllowIds?: string[]; roleAllowIds?: string[]; roleDenyIds?: string[] }): DiscordPermissionOverwriteInput[] {
+  const drafts = new Map<string, { id: string; type: 0 | 1; allow: bigint; deny: bigint }>();
+  const merge = (id: string, type: 0 | 1, allow: bigint, deny: bigint) => {
+    if (!validDiscordId(id)) return;
+    if (type === 0 && id === guildId && allow !== 0n) return;
+    const key = `${type}:${id}`;
+    const current = drafts.get(key) ?? { id, type, allow: 0n, deny: 0n };
+    current.allow |= allow;
+    current.deny |= deny;
+    if ((current.deny & VIEW_CHANNEL) === VIEW_CHANNEL) current.allow &= ~VIEW_CHANNEL;
+    drafts.set(key, current);
+  };
+  if (input.everyoneDenied) merge(guildId, 0, 0n, VIEW_CHANNEL);
+  for (const id of input.userAllowIds ?? []) merge(id, 1, CHANNEL_ACCESS_ALLOW, 0n);
+  for (const id of input.roleAllowIds ?? []) merge(id, 0, CHANNEL_ACCESS_ALLOW, 0n);
+  for (const id of input.roleDenyIds ?? []) merge(id, 0, 0n, VIEW_CHANNEL);
+  return [...drafts.values()].map((overwrite) => ({
+    id: overwrite.id,
+    type: overwrite.type,
+    allow: overwrite.allow.toString(),
+    deny: overwrite.deny.toString()
+  }));
+}
+
+async function createGuildChannel(env: Env, guildId: string, payload: Record<string, unknown>, reason: string): Promise<DiscordCreatedChannel> {
+  const response = await discordApi(env, `/guilds/${guildId}/channels`, {
+    method: "POST",
+    headers: reason ? { "X-Audit-Log-Reason": discordAuditReason(reason) } : undefined,
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error(`Discord channel create failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  return await response.json() as DiscordCreatedChannel;
+}
+
+async function deleteDiscordChannel(env: Env, channelId: string, reason: string): Promise<void> {
+  const response = await discordApi(env, `/channels/${channelId}`, {
+    method: "DELETE",
+    headers: reason ? { "X-Audit-Log-Reason": discordAuditReason(reason) } : undefined
+  });
+  if (!response.ok) throw new Error(`Discord channel delete failed with ${response.status}: ${await responseTextSnippet(response)}`);
+}
+
+async function fetchGuildChannels(env: Env, guildId: string): Promise<DiscordChannelDetails[]> {
+  const response = await discordApi(env, `/guilds/${guildId}/channels`);
+  if (!response.ok) throw new Error(`Discord guild channel list failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  return await response.json() as DiscordChannelDetails[];
+}
+
+async function postDiscordChannelMessage(env: Env, channelId: string, content: string, mentions: { users?: string[]; roles?: string[] }): Promise<string | null> {
+  const response = await discordApi(env, `/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content: truncate(content, 2000), allowed_mentions: safeAllowedMentions(mentions) })
+  });
+  if (!response.ok) throw new Error(`Discord channel message failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  const body = await response.json().catch(() => ({})) as { id?: string };
+  return typeof body.id === "string" ? body.id : null;
+}
+
+async function configuredStaffRoleIds(env: Env): Promise<string[]> {
+  if (!env.DB) return [];
+  const placeholders = DISCORD_STAFF_ROLE_PERMISSION_KEYS.map(() => "?").join(", ");
+  const result = await env.DB.prepare(
+    `SELECT discord_role_id as id FROM role_mappings
+     WHERE permission_key IN (${placeholders}) AND is_reference_only = 0 AND discord_role_id != ''`
+  ).bind(...DISCORD_STAFF_ROLE_PERMISSION_KEYS).all<{ id: string }>();
+  return uniqueValidDiscordIds(result.results.map((row) => row.id));
+}
+
+async function protectedDiscordCategoryIds(env: Env): Promise<Set<string>> {
+  const ids = new Set<string>((env.PROTECTED_DISCORD_CATEGORY_IDS ?? "").split(",").map((value) => value.trim()).filter(validDiscordId));
+  if (env.DB) {
+    const placeholders = PROTECTED_CATEGORY_MAPPING_KEYS.map(() => "?").join(", ");
+    const result = await env.DB.prepare(
+      `SELECT discord_channel_id as id FROM discord_channel_mappings
+       WHERE mapping_key IN (${placeholders}) AND discord_channel_id != ''`
+    ).bind(...PROTECTED_CATEGORY_MAPPING_KEYS).all<{ id: string }>();
+    for (const row of result.results) if (validDiscordId(row.id)) ids.add(row.id);
+  }
+  return ids;
+}
+
+async function configuredMuteRoleId(env: Env): Promise<string | null> {
+  if (validDiscordId(env.MUTE_ROLE_ID)) return env.MUTE_ROLE_ID;
+  if (!env.DB) return null;
+  const row = await env.DB.prepare(
+    "SELECT discord_channel_id as id FROM discord_channel_mappings WHERE mapping_key = 'MUTE_ROLE_ID' AND discord_channel_id != '' LIMIT 1"
+  ).first<{ id: string }>();
+  return validDiscordId(row?.id) ? row.id : null;
+}
+
+async function recordModerationCase(
+  env: Env,
+  ctx: AuthContext,
+  guildId: string,
+  targetUserId: string,
+  actionType: string,
+  reason: string,
+  durationSeconds: number | null,
+  expiresAt: string | null,
+  metadata: Record<string, unknown>
+): Promise<string> {
+  if (!env.DB) throw new Error("D1 is required for moderation cases.");
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO discord_moderation_cases
+      (id, guild_id, target_user_id, moderator_user_id, action_type, reason, duration_seconds, expires_at, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, guildId, targetUserId, ctx.user.id, actionType, reason, durationSeconds, expiresAt, JSON.stringify(metadata)).run();
+  return id;
+}
+
+async function recordDiscordAdminAction(
+  env: Env,
+  ctx: AuthContext,
+  actionType: string,
+  targetType: string,
+  targetId: string | null,
+  summary: string,
+  metadata: Record<string, unknown>,
+  logKind: DiscordLogKind
+): Promise<void> {
+  if (env.DB) {
+    await env.DB.prepare(
+      `INSERT INTO discord_admin_actions
+        (id, guild_id, actor_user_id, action_type, target_type, target_id, summary, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), env.DISCORD_GUILD_ID ?? "", ctx.user.id, actionType, targetType, targetId, summary, JSON.stringify(metadata)).run();
+  }
+  await audit(env, `DISCORD_${actionType}`, auditSafeMetadata({ target_type: targetType, target_id: targetId, summary, ...metadata }), ctx.user.id);
+  await postDiscordLog(env, logKind, `**${actionType}** by ${ctx.user.displayName} (${ctx.user.discordId})\n${summary}`);
+}
+
+async function postDiscordLog(env: Env, kind: DiscordLogKind, content: string): Promise<void> {
+  const channelId = await configuredLogChannelId(env, kind);
+  if (!channelId) {
+    console.warn(JSON.stringify({ event: "discord_log_channel_missing", kind, content: truncate(content, 500) }));
+    return;
+  }
+  const response = await discordApi(env, `/channels/${channelId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content: truncate(content, 1900), allowed_mentions: { parse: [] } })
+  });
+  if (!response.ok) console.warn(JSON.stringify({ event: "discord_log_post_failed", kind, channelId, status: response.status, body: await responseTextSnippet(response) }));
+}
+
+async function configuredLogChannelId(env: Env, kind: DiscordLogKind): Promise<string | null> {
+  type LogChannelConfigKey = "MOD_LOG_CHANNEL_ID" | "MESSAGE_LOG_CHANNEL_ID" | "MEMBER_LOG_CHANNEL_ID" | "ADMIN_LOG_CHANNEL_ID" | "DISCORD_ADMIN_LOG_CHANNEL_ID";
+  const keys: Array<LogChannelConfigKey | "ADMIN_LOG"> = kind === "MOD"
+    ? ["MOD_LOG_CHANNEL_ID", "DISCORD_ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG"]
+    : kind === "MESSAGE"
+      ? ["MESSAGE_LOG_CHANNEL_ID", "DISCORD_ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG"]
+      : kind === "MEMBER"
+        ? ["MEMBER_LOG_CHANNEL_ID", "DISCORD_ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG"]
+        : ["ADMIN_LOG_CHANNEL_ID", "DISCORD_ADMIN_LOG_CHANNEL_ID", "ADMIN_LOG"];
+  for (const key of keys) {
+    const envValue = key !== "ADMIN_LOG" ? env[key] : undefined;
+    if (validDiscordId(envValue)) return envValue;
+    if (env.DB) {
+      const mapped = await mappedChannel(env, key);
+      if (validDiscordId(mapped)) return mapped;
+    }
+  }
+  return null;
+}
+
+function auditSafeMetadata(metadata: Record<string, unknown>): Record<string, string | number | boolean | null | undefined> {
+  const safe: Record<string, string | number | boolean | null | undefined> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) safe[key] = value;
+    else safe[key] = truncate(JSON.stringify(value), 500);
+  }
+  return safe;
+}
+
+async function updateMemberTimeout(env: Env, guildId: string, userId: string, expiresAt: string | null, reason: string): Promise<void> {
+  const response = await discordApi(env, `/guilds/${guildId}/members/${userId}`, {
+    method: "PATCH",
+    headers: { "X-Audit-Log-Reason": discordAuditReason(reason) },
+    body: JSON.stringify({ communication_disabled_until: expiresAt })
+  });
+  if (!response.ok) throw new Error(`Discord timeout update failed with ${response.status}: ${await responseTextSnippet(response)}`);
+}
+
+async function dmUser(env: Env, userId: string, content: string): Promise<void> {
+  try {
+    const channelResponse = await discordApi(env, "/users/@me/channels", { method: "POST", body: JSON.stringify({ recipient_id: userId }) });
+    if (!channelResponse.ok) return;
+    const channel = await channelResponse.json() as { id?: string };
+    if (!channel.id) return;
+    await postDiscordChannelMessage(env, channel.id, content, {});
+  } catch (cause) {
+    console.warn(JSON.stringify({ event: "discord_dm_failed", userId, cause: safeError(cause) }));
+  }
+}
+
+async function ensureModerationHierarchy(env: Env, ctx: AuthContext, interaction: DiscordInteraction, targetId: string, action: string, requireMember: boolean): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (targetId === ctx.user.discordId) return { ok: false, message: `You cannot ${action} yourself.` };
+  const targetMember = await fetchGuildMember(env, targetId).catch(() => null);
+  if (!targetMember && requireMember) return { ok: false, message: "That user is not currently a guild member." };
+  if (!targetMember) return { ok: true };
+  const roles = await fetchGuildRoles(env);
+  const actorHighest = highestRolePosition(interaction.member?.roles ?? [], roles);
+  const targetHighest = highestRolePosition(targetMember.roles ?? [], roles);
+  const botUser = await fetchBotUser(env);
+  const botMember = await fetchGuildMember(env, botUser.id).catch(() => null);
+  const botHighest = highestRolePosition(botMember?.roles ?? [], roles);
+  if (targetHighest >= botHighest) return { ok: false, message: `The bot cannot ${action} a member with an equal or higher Discord role.` };
+  if (!hasActionPermission(ctx, "ADMIN") && targetHighest >= actorHighest) return { ok: false, message: `You cannot ${action} a member with an equal or higher Discord role.` };
+  return { ok: true };
+}
+
+async function fetchGuildRoles(env: Env): Promise<DiscordGuildRole[]> {
+  const guildId = requireEnv(env, "DISCORD_GUILD_ID");
+  const response = await discordApi(env, `/guilds/${guildId}/roles`);
+  if (!response.ok) throw new Error(`Discord guild roles fetch failed with ${response.status}: ${await responseTextSnippet(response)}`);
+  return await response.json() as DiscordGuildRole[];
+}
+
+function highestRolePosition(roleIds: string[], roles: DiscordGuildRole[]): number {
+  const byId = new Map(roles.map((role) => [role.id, role.position]));
+  return roleIds.reduce((highest, roleId) => Math.max(highest, byId.get(roleId) ?? 0), 0);
+}
+
+function parseDurationSeconds(value: string): { ok: true; seconds: number } | { ok: false; message: string } {
+  const match = value.trim().toLowerCase().match(/^(\d{1,3})(m|h|d)$/);
+  if (!match) return { ok: false, message: "Duration must look like 10m, 1h, 24h, 3d, or 7d." };
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const seconds = unit === "m" ? amount * 60 : unit === "h" ? amount * 60 * 60 : amount * 24 * 60 * 60;
+  if (!Number.isFinite(seconds) || seconds <= 0) return { ok: false, message: "Duration must be greater than zero." };
+  if (seconds > DISCORD_TIMEOUT_MAX_SECONDS) return { ok: false, message: "Discord timeouts cannot exceed 28 days." };
+  return { ok: true, seconds };
+}
+
+function announcementMention(ctx: AuthContext, mode: string, roleId: string): AnnouncementMentionResult {
+  if (!["none", "everyone", "here", "role"].includes(mode)) return { ok: false, message: "Mention must be none, everyone, here, or role." };
+  if (mode === "none") return { ok: true, content: "", allowedMentions: { parse: [] } };
+  if ((mode === "everyone" || mode === "here") && !hasActionPermission(ctx, "ADMIN") && !hasActionPermission(ctx, "MANAGE_MASS_MENTIONS")) {
+    return { ok: false, message: "Only admins or mass-mention managers can use @everyone or @here." };
+  }
+  if (mode === "everyone") return { ok: true, content: "@everyone", allowedMentions: { parse: ["everyone"] } };
+  if (mode === "here") return { ok: true, content: "@here", allowedMentions: { parse: ["everyone"] } };
+  if (!roleId) return { ok: false, message: "Role mention mode requires the role option." };
+  return { ok: true, content: `<@&${roleId}>`, allowedMentions: { parse: [], roles: [roleId] } };
+}
+
+function discordAuditReason(reason: string): string {
+  return encodeURIComponent(truncate(reason, 512));
+}
+
 function claimantLabel(claim: { staffDiscordId: string | null; staffDisplayName: string }): string {
   return claim.staffDisplayName || (claim.staffDiscordId ? `Discord user ${claim.staffDiscordId}` : "another staff member");
 }
@@ -2626,17 +3462,20 @@ async function authContextFromInteraction(env: Env, interaction: DiscordInteract
   }
 
   const permissions = new Set<LogicalPermission>(["PUBLIC"]);
+  const directActions = new Set<ActionPermission>();
   for (const role of roles) {
-    const row = await env.DB.prepare("SELECT permission_key as permissionKey FROM role_mappings WHERE discord_role_id = ? AND is_reference_only = 0").bind(role.discordRoleId).first<{ permissionKey: LogicalPermission | null }>();
-    if (row?.permissionKey) permissions.add(row.permissionKey);
+    const row = await env.DB.prepare("SELECT permission_key as permissionKey FROM role_mappings WHERE discord_role_id = ? AND is_reference_only = 0").bind(role.discordRoleId).first<{ permissionKey: string | null }>();
+    if (isLogicalPermission(row?.permissionKey)) permissions.add(row.permissionKey);
+    if (isActionPermission(row?.permissionKey)) directActions.add(row.permissionKey);
   }
   const bootstrap = (env.BOOTSTRAP_ADMIN_DISCORD_IDS ?? "").split(",").map((value) => value.trim()).includes(user.discordId);
   if (bootstrap) {
     permissions.add("ADMIN");
     permissions.add("CHIEF_JUSTICE");
+    directActions.add("ADMIN");
   }
   const logical = [...permissions].sort() as LogicalPermission[];
-  return { authenticated: true, sessionId: `discord:${interaction.id}`, user, roles, permissions: logical, actionPermissions: deriveActionPermissions(logical), isBootstrapAdmin: bootstrap };
+  return { authenticated: true, sessionId: `discord:${interaction.id}`, user, roles, permissions: logical, actionPermissions: mergeActionPermissions(logical, [...directActions]), isBootstrapAdmin: bootstrap };
 }
 
 async function verifyDiscordRequest(request: Request, env: Env, rawBody: string): Promise<boolean> {
@@ -3036,6 +3875,46 @@ interface DiscordPermissionOverwrite {
   allow?: string;
   deny?: string;
 }
+
+interface ParsedDiscordIds {
+  ids: string[];
+  invalid: string[];
+  rejectedBroad: boolean;
+}
+
+type DiscordCategoryVisibility = "public" | "staff_only" | "private_roles" | "private_users_and_roles";
+
+interface DiscordPermissionOverwriteInput {
+  id: string;
+  type: 0 | 1;
+  allow: string;
+  deny: string;
+}
+
+interface DiscordCreatedChannel {
+  id: string;
+  name?: string;
+  type?: number;
+  parent_id?: string | null;
+}
+
+interface DiscordGuildRole {
+  id: string;
+  position: number;
+}
+
+type DiscordLogKind = "ADMIN" | "MOD" | "MESSAGE" | "MEMBER";
+
+type AnnouncementMentionResult =
+  | {
+      ok: true;
+      content: string;
+      allowedMentions: { parse: string[]; roles?: string[] };
+    }
+  | {
+      ok: false;
+      message: string;
+    };
 
 interface TicketTarget {
   sourceType: "request" | "bar_exam_followup";

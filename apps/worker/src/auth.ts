@@ -22,7 +22,7 @@ import {
 import { randomToken, sha256 } from "./crypto";
 import { avatarUrl, discordAuthorizeUrl, exchangeDiscordCode, fetchDiscordUser, fetchGuildMember, MissingEnvironmentError } from "./discord";
 import { errorJson, json, redirect } from "./http";
-import { deriveActionPermissions } from "./permissions";
+import { isActionPermission, isLogicalPermission, mergeActionPermissions } from "./permissions";
 import { syncProfessionalProfileForUser } from "./professionalProfiles";
 import type { AuthContext, AuthUser, CachedRole, DiscordGuildMember, DiscordUser, Env, MeResponse, MaybeAuthContext } from "./types";
 
@@ -333,11 +333,13 @@ export async function requireAuth(request: Request, env: Env): Promise<AuthConte
 async function buildAuthContext(env: Env, user: AuthUser, sessionId: string): Promise<AuthContext> {
   const roles = await getCachedRoles(env, user.id);
   const mappedPermissions = await getMappedPermissions(env, roles.map((role) => role.discordRoleId));
-  const permissions = new Set<LogicalPermission>(["PUBLIC", ...mappedPermissions]);
+  const permissions = new Set<LogicalPermission>(["PUBLIC", ...mappedPermissions.logical]);
+  const directActions = new Set<ActionPermission>(mappedPermissions.actions);
   const isBootstrapAdmin = bootstrapAdminIds(env).includes(user.discordId);
   if (isBootstrapAdmin) {
     permissions.add("ADMIN");
     permissions.add("CHIEF_JUSTICE");
+    directActions.add("ADMIN");
   }
   const logical = [...permissions].sort() as LogicalPermission[];
   return {
@@ -346,7 +348,7 @@ async function buildAuthContext(env: Env, user: AuthUser, sessionId: string): Pr
     user,
     roles,
     permissions: logical,
-    actionPermissions: deriveActionPermissions(logical),
+    actionPermissions: mergeActionPermissions(logical, [...directActions]),
     isBootstrapAdmin
   };
 }
@@ -415,16 +417,18 @@ async function getCachedRoles(env: Env, userId: string): Promise<CachedRole[]> {
   return result.results;
 }
 
-async function getMappedPermissions(env: Env, roleIds: string[]): Promise<LogicalPermission[]> {
-  if (roleIds.length === 0) return [];
-  const permissions = new Set<LogicalPermission>();
+async function getMappedPermissions(env: Env, roleIds: string[]): Promise<{ logical: LogicalPermission[]; actions: ActionPermission[] }> {
+  if (roleIds.length === 0) return { logical: [], actions: [] };
+  const logical = new Set<LogicalPermission>();
+  const actions = new Set<ActionPermission>();
   for (const roleId of roleIds) {
     const row = await env.DB!.prepare("SELECT permission_key as permissionKey FROM role_mappings WHERE discord_role_id = ? AND is_reference_only = 0")
       .bind(roleId)
-      .first<{ permissionKey: LogicalPermission | null }>();
-    if (row?.permissionKey) permissions.add(row.permissionKey);
+      .first<{ permissionKey: string | null }>();
+    if (isLogicalPermission(row?.permissionKey)) logical.add(row.permissionKey);
+    if (isActionPermission(row?.permissionKey)) actions.add(row.permissionKey);
   }
-  return [...permissions];
+  return { logical: [...logical], actions: [...actions] };
 }
 
 async function consumeState(env: Env, state: string): Promise<{ redirectAfter: string | null } | null> {

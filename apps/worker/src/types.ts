@@ -13,6 +13,13 @@ export interface Env {
   SESSION_SECRET?: string;
   BOOTSTRAP_ADMIN_DISCORD_IDS?: string;
   LEGACY_BAR_EXAM_URL?: string;
+  ADMIN_LOG_CHANNEL_ID?: string;
+  DISCORD_ADMIN_LOG_CHANNEL_ID?: string;
+  MOD_LOG_CHANNEL_ID?: string;
+  MESSAGE_LOG_CHANNEL_ID?: string;
+  MEMBER_LOG_CHANNEL_ID?: string;
+  MUTE_ROLE_ID?: string;
+  PROTECTED_DISCORD_CATEGORY_IDS?: string;
 }
 
 export interface DiscordUser {

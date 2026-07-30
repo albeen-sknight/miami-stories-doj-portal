@@ -1,23 +1,8 @@
 import type { ActionPermission, LogicalPermission } from "@shotta-doj/shared";
+import { ACTION_PERMISSIONS, LOGICAL_PERMISSIONS } from "@shotta-doj/shared";
 import type { AuthContext } from "./types";
 
-const ALL_ACTIONS: ActionPermission[] = [
-  "VIEW_DASHBOARD",
-  "SUBMIT_SERVICE_REQUEST",
-  "VIEW_OWN_REQUESTS",
-  "MANAGE_REQUESTS",
-  "CREATE_DOCKET",
-  "PUBLISH_DOCKET",
-  "START_BAR_EXAM",
-  "REVIEW_BAR_EXAMS",
-  "MANAGE_RESOURCES",
-  "MANAGE_FAQ",
-  "MANAGE_ATTORNEY_REGISTRY",
-  "MANAGE_ROLE_MAPPINGS",
-  "MANAGE_DISCORD_CHANNELS",
-  "VIEW_AUDIT_LOGS",
-  "ADMIN"
-];
+const ALL_ACTIONS: ActionPermission[] = [...ACTION_PERMISSIONS];
 
 const ACTIONS_BY_LOGICAL: Record<LogicalPermission, ActionPermission[]> = {
   PUBLIC: [],
@@ -42,6 +27,10 @@ const ACTIONS_BY_LOGICAL: Record<LogicalPermission, ActionPermission[]> = {
     "MANAGE_ATTORNEY_REGISTRY",
     "MANAGE_ROLE_MAPPINGS",
     "MANAGE_DISCORD_CHANNELS",
+    "MANAGE_DISCORD_MODERATION",
+    "MANAGE_DISCORD_LOGS",
+    "MANAGE_ANNOUNCEMENTS",
+    "MANAGE_MASS_MENTIONS",
     "VIEW_AUDIT_LOGS",
     "ADMIN"
   ],
@@ -56,6 +45,21 @@ export function deriveActionPermissions(logicalPermissions: LogicalPermission[])
     for (const action of ACTIONS_BY_LOGICAL[permission] ?? []) actions.add(action);
   }
   return [...actions].sort();
+}
+
+export function mergeActionPermissions(logicalPermissions: LogicalPermission[], directActionPermissions: ActionPermission[] = []): ActionPermission[] {
+  if (logicalPermissions.includes("ADMIN") || directActionPermissions.includes("ADMIN")) return ALL_ACTIONS;
+  const actions = new Set<ActionPermission>(deriveActionPermissions(logicalPermissions));
+  for (const permission of directActionPermissions) actions.add(permission);
+  return [...actions].sort();
+}
+
+export function isLogicalPermission(value: string | null | undefined): value is LogicalPermission {
+  return LOGICAL_PERMISSIONS.includes(value as LogicalPermission);
+}
+
+export function isActionPermission(value: string | null | undefined): value is ActionPermission {
+  return ACTION_PERMISSIONS.includes(value as ActionPermission);
 }
 
 export function hasActionPermission(ctx: AuthContext, permission: ActionPermission): boolean {
