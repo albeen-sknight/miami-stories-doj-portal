@@ -4257,42 +4257,44 @@ function StaffRequestDetail({ me, loading }: { me: CurrentUserResponse | null; l
     <>
       <PageHeader eyebrow="Dashboard" title={detail?.requestNumber ?? "Request"} description="Private service request detail and Discord ticket controls." />
       <Content>{!detail ? <LoadingState /> : (
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="space-y-4">
+        <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:items-start">
+          <div className="min-w-0 space-y-4">
             {detail.deletedAt ? <DeletedRecordBanner deletedAt={detail.deletedAt} deletedBy={detail.deletedByDisplayName} reason={detail.deleteReason} /> : null}
             <RequestDetailCard detail={detail} />
           </div>
-          <Card>
-            <h2 className="text-xl font-semibold">Staff actions</h2>
-            <div className="mt-4 grid gap-3">
-              {(["RECEIVED", "UNDER_REVIEW", "NEEDS_INFO", "CLOSED"] as const).map((status) => (
-                <button key={status} onClick={() => run(() => updateRequestStatus(detail.id, status))} className="rounded-md border border-white/10 px-3 py-2 text-left hover:border-gold">{status.replaceAll("_", " ")}</button>
-              ))}
-              {canCloseArchiveTicket ? <button onClick={() => setCloseOpen(true)} className="rounded-md border border-gold/50 px-3 py-2 text-left font-semibold text-gold">
-                Close ticket and archive transcript
-              </button> : null}
-              <button onClick={() => setAssignOpen(true)} className="rounded-md border border-white/10 px-3 py-2 text-left hover:border-gold">
-                {detail.assignedJudgeDisplayName ? "Reassign Judge" : "Assign Judge"}
-              </button>
-              {!channelPostWorkflow ? <button onClick={() => run(() => createDiscordTicket(detail.id))} className="rounded-md bg-gold px-3 py-2 text-left font-semibold text-black">Create/retry private Discord channel</button> : null}
-              <button onClick={() => run(() => postDiscordTicketEmbed(detail.id))} className="rounded-md bg-gold px-3 py-2 text-left font-semibold text-black">{channelPostWorkflow ? "Post/repost lawyer request embed" : "Post/repost private ticket embed"}</button>
-              {canManageDocket(me) ? (
-                <button
-                  onClick={() => {
-                    navigate(`/dashboard/docket/new?request=${detail.requestNumber}`);
-                  }}
-                  className="rounded-md border border-gold/50 px-3 py-2 text-left font-semibold text-gold"
-                >
-                  Create docket entry from this request
+          <aside className="min-w-0 w-full xl:sticky xl:top-24">
+            <Card className="overflow-hidden">
+              <h2 className="text-xl font-semibold [overflow-wrap:anywhere]">Staff actions</h2>
+              <div className="mt-4 grid gap-3">
+                {(["RECEIVED", "UNDER_REVIEW", "NEEDS_INFO", "CLOSED"] as const).map((status) => (
+                  <button key={status} onClick={() => run(() => updateRequestStatus(detail.id, status))} className="min-w-0 rounded-md border border-white/10 px-3 py-2 text-left [overflow-wrap:anywhere] hover:border-gold">{status.replaceAll("_", " ")}</button>
+                ))}
+                {canCloseArchiveTicket ? <button onClick={() => setCloseOpen(true)} className="min-w-0 rounded-md border border-gold/50 px-3 py-2 text-left font-semibold text-gold [overflow-wrap:anywhere]">
+                  Close ticket and archive transcript
+                </button> : null}
+                <button onClick={() => setAssignOpen(true)} className="min-w-0 rounded-md border border-white/10 px-3 py-2 text-left [overflow-wrap:anywhere] hover:border-gold">
+                  {detail.assignedJudgeDisplayName ? "Reassign Judge" : "Assign Judge"}
                 </button>
-              ) : null}
-              <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Admin/staff note" className="rounded-md border border-white/10 bg-black px-3 py-2 outline-none focus:border-gold" />
-              <button onClick={() => run(async () => { await addRequestEvent(detail.id, note); setNote(""); return fetchAdminRequest(detail.id); })} className="rounded-md border border-white/10 px-3 py-2 text-left hover:border-gold">Add note</button>
-              <button onClick={() => setDeleteOpen(true)} className="rounded-md border border-red-500/40 px-3 py-2 text-left text-red-200 hover:border-red-300">Delete service request</button>
-              {actionMessage ? <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{actionMessage}</p> : null}
-              {error ? <p className="text-sm text-red-300">{error}</p> : null}
-            </div>
-          </Card>
+                {!channelPostWorkflow ? <button onClick={() => run(() => createDiscordTicket(detail.id))} className="min-w-0 rounded-md bg-gold px-3 py-2 text-left font-semibold text-black [overflow-wrap:anywhere]">Create/retry private Discord channel</button> : null}
+                <button onClick={() => run(() => postDiscordTicketEmbed(detail.id))} className="min-w-0 rounded-md bg-gold px-3 py-2 text-left font-semibold text-black [overflow-wrap:anywhere]">{channelPostWorkflow ? "Post/repost lawyer request embed" : "Post/repost private ticket embed"}</button>
+                {canManageDocket(me) ? (
+                  <button
+                    onClick={() => {
+                      navigate(`/dashboard/docket/new?request=${detail.requestNumber}`);
+                    }}
+                    className="min-w-0 rounded-md border border-gold/50 px-3 py-2 text-left font-semibold text-gold [overflow-wrap:anywhere]"
+                  >
+                    Create docket entry from this request
+                  </button>
+                ) : null}
+                <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Admin/staff note" className="min-w-0 rounded-md border border-white/10 bg-black px-3 py-2 [overflow-wrap:anywhere] outline-none focus:border-gold" />
+                <button onClick={() => run(async () => { await addRequestEvent(detail.id, note); setNote(""); return fetchAdminRequest(detail.id); })} className="min-w-0 rounded-md border border-white/10 px-3 py-2 text-left [overflow-wrap:anywhere] hover:border-gold">Add note</button>
+                <button onClick={() => setDeleteOpen(true)} className="min-w-0 rounded-md border border-red-500/40 px-3 py-2 text-left text-red-200 [overflow-wrap:anywhere] hover:border-red-300">Delete service request</button>
+                {actionMessage ? <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200 [overflow-wrap:anywhere]">{actionMessage}</p> : null}
+                {error ? <p className="text-sm text-red-300 [overflow-wrap:anywhere]">{error}</p> : null}
+              </div>
+            </Card>
+          </aside>
         </div>
       )}</Content>
       <ReasonModal
@@ -4658,31 +4660,31 @@ function RequestDetailCard({ detail }: { detail: { requestNumber: string; reques
   const channelPostWorkflow = isChannelPostRequestType(detail.requestType);
   const transcriptIds = transcriptIdsFromEvents(detail.events);
   return (
-    <Card>
+    <Card className="overflow-hidden">
       <div className="flex flex-wrap gap-3">
         <Badge>{detail.status}</Badge>
         <Badge>{detail.discordTicketStatus}</Badge>
       </div>
-      <h2 className="mt-4 text-2xl font-semibold">{detail.requestNumber}</h2>
-      <p className="mt-1 text-muted">{detail.requestType.replaceAll("_", " ")} submitted by {detail.requesterDiscordUsername ?? "unknown"}</p>
+      <h2 className="mt-4 text-2xl font-semibold [overflow-wrap:anywhere]">{detail.requestNumber}</h2>
+      <p className="mt-1 text-muted [overflow-wrap:anywhere]">{detail.requestType.replaceAll("_", " ")} submitted by {detail.requesterDiscordUsername ?? "unknown"}</p>
       <div className="mt-5 grid gap-3 text-sm">
         {detail.templateUrl ? <ExternalAnchor href={detail.templateUrl}>Template</ExternalAnchor> : null}
         {detail.documentUrl ? <ExternalAnchor href={detail.documentUrl}>Submitted document</ExternalAnchor> : null}
         {detail.assignedJudgeDisplayName ? (
-          <p className="text-muted">
-            Assigned judge: <span className="font-semibold text-white">{detail.assignedJudgeDisplayName}</span>
+          <p className="text-muted [overflow-wrap:anywhere]">
+            Assigned judge: <span className="font-semibold text-white [overflow-wrap:anywhere]">{detail.assignedJudgeDisplayName}</span>
             {detail.assignedJudgeAssignedAt ? ` (${new Date(detail.assignedJudgeAssignedAt).toLocaleString()})` : ""}
           </p>
         ) : null}
-        {detail.discordTicketChannelId && !channelPostWorkflow ? <p className="text-muted">Private ticket channel ID: {detail.discordTicketChannelId}</p> : null}
-        {detail.discordTicketMessageId ? <p className="text-muted">{channelPostWorkflow ? "Request channel message ID" : "Private ticket message ID"}: {detail.discordTicketMessageId}</p> : null}
+        {detail.discordTicketChannelId && !channelPostWorkflow ? <p className="text-muted [overflow-wrap:anywhere]">Private ticket channel ID: <span className="break-all">{detail.discordTicketChannelId}</span></p> : null}
+        {detail.discordTicketMessageId ? <p className="text-muted [overflow-wrap:anywhere]">{channelPostWorkflow ? "Request channel message ID" : "Private ticket message ID"}: <span className="break-all">{detail.discordTicketMessageId}</span></p> : null}
       </div>
       {transcriptIds.length > 0 ? (
-        <div className="mt-5 rounded-md border border-gold/30 bg-gold/10 p-3 text-sm">
+        <div className="mt-5 min-w-0 rounded-md border border-gold/30 bg-gold/10 p-3 text-sm">
           <p className="font-semibold text-gold">Saved transcript{transcriptIds.length > 1 ? "s" : ""}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {transcriptIds.map((id) => (
-              <Link key={id} to={`/dashboard/transcripts/${id}`} className="rounded-md border border-gold/40 px-3 py-2 font-semibold text-gold hover:bg-gold hover:text-black">
+              <Link key={id} to={`/dashboard/transcripts/${id}`} className="min-w-0 break-all rounded-md border border-gold/40 px-3 py-2 font-semibold text-gold hover:bg-gold hover:text-black">
                 {id}
               </Link>
             ))}
@@ -4691,12 +4693,15 @@ function RequestDetailCard({ detail }: { detail: { requestNumber: string; reques
       ) : null}
       <h3 className="mt-6 text-lg font-semibold">Payload</h3>
       <dl className="mt-3 grid gap-3">
-        {Object.entries(detail.payload).map(([key, value]) => (
-          <div key={key} className="rounded-md border border-white/10 bg-black p-3">
-            <dt className="text-xs uppercase tracking-wide text-muted">{key}</dt>
-            <dd className="mt-1 whitespace-pre-wrap break-words text-sm">{String(value)}</dd>
-          </div>
-        ))}
+        {Object.entries(detail.payload).map(([key, value]) => {
+          const displayValue = formatPayloadValue(value);
+          return (
+            <div key={key} className="min-w-0 max-w-full overflow-hidden rounded-md border border-white/10 bg-black p-3">
+              <dt className="text-xs font-semibold text-muted [overflow-wrap:anywhere]">{formatRequestPayloadLabel(key)}</dt>
+              <dd className={`mt-1 whitespace-pre-wrap text-sm [overflow-wrap:anywhere] ${isUrlLikePayloadValue(key, displayValue) ? "break-all" : "break-words"}`}>{displayValue}</dd>
+            </div>
+          );
+        })}
       </dl>
       <h3 className="mt-6 text-lg font-semibold">Events</h3>
       <div className="mt-3 space-y-2 text-sm text-muted">
@@ -4704,6 +4709,52 @@ function RequestDetailCard({ detail }: { detail: { requestNumber: string; reques
       </div>
     </Card>
   );
+}
+
+const REQUEST_PAYLOAD_LABELS: Record<string, string> = {
+  arrestReportNumber: "Arrest Report Number",
+  arrestreportnumber: "Arrest Report Number",
+  defendantName: "Defendant Name",
+  defendantname: "Defendant Name",
+  defendantCitizenId: "Defendant Citizen ID",
+  defendantcitizenid: "Defendant Citizen ID",
+  allegedCharges: "Alleged Charges",
+  allegedcharges: "Alleged Charges",
+  briefSummary: "Brief Summary",
+  briefsummary: "Brief Summary",
+  arrestingAgencyOfficer: "Arresting Agency Officer",
+  arrestingagencyofficer: "Arresting Agency Officer",
+  schedulingNotes: "Scheduling Notes",
+  schedulingnotes: "Scheduling Notes",
+  evidenceLink: "Evidence Link",
+  evidencelink: "Evidence Link",
+};
+
+function formatRequestPayloadLabel(key: string): string {
+  const mapped = REQUEST_PAYLOAD_LABELS[key] ?? REQUEST_PAYLOAD_LABELS[key.replace(/[^a-z0-9]/gi, "").toLowerCase()];
+  if (mapped) return mapped;
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b(id|url|doj|pdf)\b/gi, (word) => word.toUpperCase())
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatPayloadValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function isUrlLikePayloadValue(key: string, value: string): boolean {
+  return /https?:\/\//i.test(value) || /(?:url|link)$/i.test(key);
 }
 
 function transcriptIdsFromEvents(events: Array<{ metadata?: Record<string, unknown> }>): string[] {
@@ -4720,15 +4771,15 @@ function RequestEventRow({ event }: { event: { eventType: string; message: strin
   const details = discord && typeof discord === "object" ? discord as Record<string, unknown> : null;
   const failed = event.eventType.includes("FAILED");
   return (
-    <div className={failed ? "rounded-md border border-red-500/30 bg-red-500/10 p-3 text-red-100" : ""}>
-      <p>{new Date(event.createdAt).toLocaleString()} - {event.eventType}: {event.message}</p>
+    <div className={failed ? "min-w-0 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-red-100" : "min-w-0"}>
+      <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{new Date(event.createdAt).toLocaleString()} - {event.eventType}: {event.message}</p>
       {details ? (
         <dl className="mt-2 grid gap-1 text-xs text-zinc-200 md:grid-cols-2">
           {["status", "discordCode", "discordMessage", "likelyFix", "action", "guildId", "categoryId", "channelId", "messageId", "requestNumber"].map((key) => (
             details[key] !== undefined && details[key] !== null ? (
-              <div key={key}>
-                <dt className="uppercase tracking-wide text-muted">{key}</dt>
-                <dd className="break-words">{typeof details[key] === "object" ? JSON.stringify(details[key]) : String(details[key])}</dd>
+              <div key={key} className="min-w-0">
+                <dt className="uppercase tracking-wide text-muted [overflow-wrap:anywhere]">{key}</dt>
+                <dd className="break-words [overflow-wrap:anywhere]">{typeof details[key] === "object" ? JSON.stringify(details[key]) : String(details[key])}</dd>
               </div>
             ) : null
           ))}
