@@ -53,6 +53,7 @@ import {
   closeDocket,
   createDocket,
   createDocketFromRequest,
+  docketDraftFromRequest,
   getDocketEvents,
   listPublicDocket,
   postDocketToDiscord,
@@ -151,6 +152,7 @@ export default {
         if (!action) return withCors(await requireMethod(request, "GET", () => adminRequestDetail(request, env, id)), request, env);
         if (action === "delete") return withCors(await requireMethod(request, "POST", () => softDeleteEntityRoute(request, env, "request", id)), request, env);
         if (action === "restore") return withCors(await requireMethod(request, "POST", () => restoreEntityRoute(request, env, "request", id)), request, env);
+        if (action === "docket-draft") return withCors(await requireMethod(request, "POST", () => docketDraftFromRequest(request, env, id)), request, env);
         if (action === "create-docket") return withCors(await requireMethod(request, "POST", () => createDocketFromRequest(request, env, id)), request, env);
         if (action === "status") return withCors(await requireMethod(request, "PATCH", () => updateRequestStatus(request, env, id)), request, env);
         if (action === "assign") return withCors(await requireMethod(request, "PATCH", () => assignRequest(request, env, id)), request, env);

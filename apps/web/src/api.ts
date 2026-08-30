@@ -19,6 +19,7 @@ import type {
   CreateDocketInput,
   CurrentUserResponse,
   DocketDetail,
+  DocketDraftResponse,
   DocketSummary,
   EligibleJudge,
   FaqEntry,
@@ -575,7 +576,11 @@ export async function deleteDocketEntry(id: string, reason: string): Promise<{ d
 }
 
 export async function createDocketFromRequest(id: string): Promise<{ data: DocketDetail }> {
-  return apiFetch(`/api/admin/requests/${id}/create-docket`, { method: "POST" });
+  return apiFetch(`/api/admin/requests/${encodeURIComponent(id)}/create-docket`, { method: "POST" });
+}
+
+export async function createDocketDraftFromRequest(id: string): Promise<{ data: DocketDraftResponse }> {
+  return apiFetch(`/api/admin/requests/${encodeURIComponent(id)}/docket-draft`, { method: "POST" });
 }
 
 export interface DeletionLogEntry {

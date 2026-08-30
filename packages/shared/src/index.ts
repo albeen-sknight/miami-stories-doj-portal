@@ -268,6 +268,51 @@ export interface CreateDocketInput {
   isArchived?: boolean;
 }
 
+export interface DocketDraftTranscriptInfo {
+  id: string;
+  portalUrl: string | null;
+  discordJumpUrl: string | null;
+  archiveChannelId: string | null;
+  archiveMessageId: string | null;
+  visibility: "STAFF_INTERNAL" | "UNKNOWN";
+  note: string;
+}
+
+export interface DocketDraftResponse {
+  input: CreateDocketInput;
+  source: {
+    requestId: string;
+    requestNumber: string;
+    requestType: ServiceRequestType;
+    generatedAt: string;
+    generator: "rules" | "gemini";
+    model: string | null;
+    fallbackReason: string | null;
+  };
+  extracted: {
+    arrestReportNumber: string | null;
+    defendantName: string | null;
+    defendantCitizenId: string | null;
+    allegedCharges: string | null;
+    arrestingAgencyOfficer: string | null;
+    evidenceLink: string | null;
+  };
+  transcript: DocketDraftTranscriptInfo | null;
+  warning: string;
+  publicBodyIncludesTranscriptLink: boolean;
+  ai: {
+    used: boolean;
+    model: string | null;
+    confidence: "low" | "medium" | "high" | null;
+    needsStaffReview: string[];
+    failure: {
+      errorType: string;
+      status: number | null;
+      timeout: boolean;
+    } | null;
+  };
+}
+
 export type AttorneyProfileKind = "JUDICIAL_OFFICER" | "ATTORNEY";
 
 export interface AttorneyResponsibility {

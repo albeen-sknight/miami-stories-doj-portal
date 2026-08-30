@@ -56,7 +56,7 @@ export const PROCEEDING_LABELS: Record<DocketProceedingType, string> = {
 
 export const REQUEST_DOCKET_SUGGESTIONS: Record<ServiceRequestType, { caseType: DocketCaseType; proceedingType: DocketProceedingType }> = {
   LAWYER: { caseType: "OTHER", proceedingType: "TEMPORARY_DEFENSE_REPRESENTATION" },
-  CRIMINAL_TRIAL: { caseType: "CRIMINAL", proceedingType: "PRELIMINARY_HEARING" },
+  CRIMINAL_TRIAL: { caseType: "CRIMINAL", proceedingType: "PROBABLE_CAUSE_REVIEW" },
   CIVIL_CASE: { caseType: "CIVIL", proceedingType: "CIVIL_CASE_REVIEW" },
   SUBPOENA: { caseType: "SUBPOENA", proceedingType: "SUBPOENA_REVIEW" },
   ARREST_WARRANT: { caseType: "WARRANT", proceedingType: "WARRANT_REVIEW" },

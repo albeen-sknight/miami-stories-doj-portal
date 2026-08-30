@@ -18,7 +18,8 @@ import type {
 import { DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, DOCKET_STATUSES } from "@shotta-doj/shared";
 import { audit } from "./audit";
 import { requireAuth } from "./auth";
-import { CASE_TYPE_PREFIX, DEFAULT_DOCKET_TIMEZONE, docketSuggestionFromRequest } from "./docketDefinitions";
+import { CASE_TYPE_PREFIX, DEFAULT_DOCKET_TIMEZONE } from "./docketDefinitions";
+import { buildDocketDraftFromRequest } from "./docketDraft";
 import { postOrUpdateDocketEmbed } from "./docketDiscord";
 import { buildSchedule, generateDocketText } from "./docketText";
 import { errorJson, json } from "./http";
@@ -312,12 +313,12 @@ export async function createDocketFromRequest(request: Request, env: Env, reques
   const ctx = requireDocketManager(await requireAuth(request, env));
   const detail = await getServiceRequestDetail(env, requestId);
   if (!detail) return errorJson("NOT_FOUND", "Service request not found.", 404);
-  const suggestion = docketSuggestionFromRequest(detail);
+  const draft = await buildDocketDraftFromRequest(env, detail);
   const response = await createDocket(
     new Request(request.url, {
       method: "POST",
       headers: request.headers,
-      body: JSON.stringify({ ...suggestion, status: "DRAFT", isPublic: false })
+      body: JSON.stringify({ ...draft.input, status: "DRAFT", isPublic: false })
     }),
     env
   );
@@ -328,6 +329,68 @@ export async function createDocketFromRequest(request: Request, env: Env, reques
       .run();
   }
   return response;
+}
+
+export async function docketDraftFromRequest(request: Request, env: Env, requestId: string): Promise<Response> {
+  const ctx = requireDocketManager(await requireAuth(request, env));
+  if (!env.DB) return errorJson("D1_UNAVAILABLE", "D1 is required for docket draft generation.", 503);
+  const detail = await getServiceRequestDetail(env, requestId);
+  if (!detail) return errorJson("NOT_FOUND", "Service request not found.", 404);
+  const draft = await buildDocketDraftFromRequest(env, detail);
+  const baseMetadata = {
+    request_id: detail.id,
+    request_number: detail.requestNumber,
+    generator: draft.source.generator,
+    model: draft.source.model,
+    transcript_id: draft.transcript?.id ?? null,
+    transcript_archive_channel_id: draft.transcript?.archiveChannelId ?? null,
+    public_body_includes_transcript_link: draft.publicBodyIncludesTranscriptLink
+  };
+  await addServiceRequestEvent(env, detail.id, ctx.user.id, "DOCKET_DRAFT_GENERATED", "A docket entry draft was generated from this service request.", baseMetadata);
+  await audit(env, "DOCKET_DRAFT_GENERATED", {
+    request_id: detail.id,
+    request_number: detail.requestNumber,
+    generator: draft.source.generator,
+    model: draft.source.model,
+    transcript_id: draft.transcript?.id ?? null
+  }, ctx.user.id);
+  if (draft.ai.used) {
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "DOCKET_DRAFT_AI_USED", "Gemini generated an enhanced docket draft for staff review.", {
+      ...baseMetadata,
+      confidence: draft.ai.confidence
+    });
+    await audit(env, "DOCKET_DRAFT_AI_USED", {
+      request_id: detail.id,
+      request_number: detail.requestNumber,
+      model: draft.ai.model,
+      confidence: draft.ai.confidence
+    }, ctx.user.id);
+  } else {
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "DOCKET_DRAFT_RULES_FALLBACK_USED", "Rules-based docket draft generation was used.", {
+      ...baseMetadata,
+      fallback_reason: draft.source.fallbackReason
+    });
+    await audit(env, "DOCKET_DRAFT_RULES_FALLBACK_USED", {
+      request_id: detail.id,
+      request_number: detail.requestNumber,
+      model: draft.ai.model,
+      fallback_reason: draft.source.fallbackReason
+    }, ctx.user.id);
+  }
+  if (draft.ai.failure) {
+    const failureMetadata = {
+      request_id: detail.id,
+      request_number: detail.requestNumber,
+      model: draft.ai.model,
+      error_type: draft.ai.failure.errorType,
+      status: draft.ai.failure.status,
+      timeout: draft.ai.failure.timeout,
+      fallback_used: true
+    };
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, "DOCKET_DRAFT_AI_FAILED", "Gemini docket draft enhancement failed and rules-based fallback was used.", failureMetadata);
+    await audit(env, "DOCKET_DRAFT_AI_FAILED", failureMetadata, ctx.user.id);
+  }
+  return json({ data: draft });
 }
 
 async function prepareInput(env: Env, input: CreateDocketInput, existingId: string | null): Promise<{ ok: true; value: PreparedDocketInput } | DocketValidationFailure> {

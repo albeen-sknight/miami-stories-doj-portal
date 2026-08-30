@@ -33,6 +33,7 @@ import type {
   CurrentUserResponse,
   DocketCaseType,
   DocketDetail,
+  DocketDraftResponse,
   DocketProceedingType,
   DocketStatus,
   EligibleJudge,
@@ -60,8 +61,8 @@ import {
   createAdminResource,
   createDiscordTicket,
   createBarExamFollowupChannel,
+  createDocketDraftFromRequest,
   createDocketEntry,
-  createDocketFromRequest,
   createJudicialRecord,
   closeDiscordTicket,
   createServiceRequest,
@@ -2537,7 +2538,9 @@ function DocketFormPage({ me, loading }: { me: CurrentUserResponse | null; loadi
   const queryParams = new URLSearchParams(window.location.search);
   const requestParam = queryParams.get("request") || queryParams.get("linkedRequest") || queryParams.get("requestId");
   const [form, setForm] = useState<DocketFormState>(emptyDocketForm());
-  const [sourceRequest, setSourceRequest] = useState<Awaited<ReturnType<typeof fetchAdminRequest>>["data"] | null>(null);
+  const [sourceRequestNumber, setSourceRequestNumber] = useState<string | null>(null);
+  const [draftWarning, setDraftWarning] = useState<string | null>(null);
+  const [draftMeta, setDraftMeta] = useState<DocketDraftResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -2547,19 +2550,25 @@ function DocketFormPage({ me, loading }: { me: CurrentUserResponse | null; loadi
 
   useEffect(() => {
     if (!docketId) return;
+    setDraftMeta(null);
     void fetchAdminDocketDetail(docketId).then((result) => setForm(formFromDocket(result.data))).catch((cause) => setError(cause instanceof Error ? cause.message : "Docket load failed."));
   }, [docketId]);
 
   useEffect(() => {
     if (!requestParam || docketId) return;
-    setNotice(`Creating docket entry from ${requestParam}...`);
-    void fetchAdminRequest(requestParam).then((result) => {
-      setSourceRequest(result.data);
-      setForm((current) => ({ ...current, ...prefillFromRequest(result.data) }));
-      setNotice(`Creating docket entry from ${result.data.requestNumber}`);
+    setNotice(`Drafting docket entry from ${requestParam}...`);
+    setDraftWarning(null);
+    setDraftMeta(null);
+    void createDocketDraftFromRequest(requestParam).then((result) => {
+      setSourceRequestNumber(result.data.source.requestNumber);
+      setDraftWarning(result.data.warning);
+      setDraftMeta(result.data);
+      setForm((current) => ({ ...current, ...formFromDocketDraft(result.data) }));
+      setNotice(`Draft ready from ${result.data.source.requestNumber}. Review and edit before saving.`);
     }).catch((cause) => {
       console.error(cause);
       setNotice(null);
+      setDraftMeta(null);
       setError(`Linked service request not found: ${requestParam}`);
     });
   }, [requestParam, docketId]);
@@ -2626,10 +2635,34 @@ function DocketFormPage({ me, loading }: { me: CurrentUserResponse | null; loadi
       <Content>
         <form className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]" onSubmit={(event) => submit(event)}>
           <Card>
-            {sourceRequest ? <Badge>Prefilled from {sourceRequest.requestNumber}</Badge> : null}
+            {sourceRequestNumber ? <Badge>Drafted from {sourceRequestNumber}</Badge> : null}
             {notice ? (
               <div className="mb-4 rounded-md border border-gold/30 bg-gold/10 p-3 text-sm text-gold">
                 {notice}
+              </div>
+            ) : null}
+            {draftWarning ? (
+              <div className="mb-4 rounded-md border border-white/10 bg-black p-3 text-sm text-zinc-200">
+                {draftWarning}
+              </div>
+            ) : null}
+            {draftMeta ? (
+              <div className="mb-4 grid gap-2 rounded-md border border-white/10 bg-black p-3 text-sm text-zinc-200">
+                <p className="font-semibold text-white">
+                  {draftMeta.ai.used ? `AI confidence: ${draftMeta.ai.confidence ?? "needs review"}` : "Rules-based draft"}
+                </p>
+                {draftMeta.ai.used && draftMeta.ai.model ? <p className="break-words text-muted">Model: {draftMeta.ai.model}</p> : null}
+                {!draftMeta.ai.used && draftMeta.source.fallbackReason ? <p className="break-words text-muted">{draftMeta.source.fallbackReason}</p> : null}
+                <p className="break-words text-muted">
+                  Related request: {draftMeta.source.requestNumber}
+                  {draftMeta.extracted.arrestReportNumber ? ` / Incident #${draftMeta.extracted.arrestReportNumber}` : ""}
+                  {draftMeta.extracted.allegedCharges ? ` / Charges: ${draftMeta.extracted.allegedCharges}` : ""}
+                </p>
+                {draftMeta.ai.needsStaffReview.length > 0 ? (
+                  <ul className="grid gap-1 pl-4 text-xs text-muted">
+                    {draftMeta.ai.needsStaffReview.map((note) => <li key={note} className="list-disc break-words">{note}</li>)}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -2730,6 +2763,21 @@ function DocketFormPage({ me, loading }: { me: CurrentUserResponse | null; loadi
                   <input value={form.linkedPetitionUrl} onChange={(event) => setFormField(setForm, "linkedPetitionUrl", event.target.value)} className="field" />
                 </Field>
               </div>
+              {sourceRequestNumber ? (
+                <div className="rounded-md border border-white/10 bg-black p-4 text-sm">
+                  <p className="font-semibold text-zinc-100">Closed Ticket Transcript</p>
+                  {form.closedTicketTranscriptLink ? (
+                    <a href={form.closedTicketTranscriptLink} target="_blank" rel="noreferrer" className="mt-2 block break-all text-gold hover:text-white">
+                      {form.closedTicketTranscriptLink}
+                    </a>
+                  ) : (
+                    <p className="mt-2 text-muted">No closed-ticket transcript is available yet.</p>
+                  )}
+                  {form.closedTicketTranscriptId ? <p className="mt-2 break-all text-muted">Transcript ID: {form.closedTicketTranscriptId}</p> : null}
+                  {form.closedTicketTranscriptVisibility ? <p className="mt-1 text-muted">Visibility: {formatDocketLabel(form.closedTicketTranscriptVisibility)}</p> : null}
+                  <p className="mt-2 text-xs text-muted">Review transcript visibility before including this in a public docket entry.</p>
+                </div>
+              ) : null}
               <div className="flex flex-wrap gap-4 text-sm">
                 <label className="flex items-center gap-2"><input type="checkbox" checked={form.isPublic} onChange={(event) => setFormField(setForm, "isPublic", event.target.checked)} /> Public docket</label>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={form.isArchived} onChange={(event) => setFormField(setForm, "isArchived", event.target.checked)} /> Archived</label>
@@ -3185,6 +3233,9 @@ interface DocketFormState {
   linkedServiceRequestId: string;
   linkedPrivateTicketChannelId: string;
   linkedPetitionUrl: string;
+  closedTicketTranscriptId: string;
+  closedTicketTranscriptLink: string;
+  closedTicketTranscriptVisibility: string;
   isPublic: boolean;
   isArchived: boolean;
 }
@@ -3211,6 +3262,9 @@ function emptyDocketForm(): DocketFormState {
     linkedServiceRequestId: "",
     linkedPrivateTicketChannelId: "",
     linkedPetitionUrl: "",
+    closedTicketTranscriptId: "",
+    closedTicketTranscriptLink: "",
+    closedTicketTranscriptVisibility: "",
     isPublic: false,
     isArchived: false
   };
@@ -3239,15 +3293,50 @@ function formFromDocket(detail: DocketDetail): DocketFormState {
     linkedServiceRequestId: detail.linkedServiceRequestId ?? "",
     linkedPrivateTicketChannelId: detail.linkedPrivateTicketChannelId ?? "",
     linkedPetitionUrl: detail.linkedPetitionUrl ?? "",
+    closedTicketTranscriptId: "",
+    closedTicketTranscriptLink: "",
+    closedTicketTranscriptVisibility: "",
     isPublic: detail.isPublic,
     isArchived: detail.isArchived
+  };
+}
+
+function formFromDocketDraft(draft: DocketDraftResponse): Partial<DocketFormState> {
+  const input = draft.input;
+  const transcriptLink = draft.transcript?.discordJumpUrl || draft.transcript?.portalUrl || "";
+  return {
+    docketNumber: input.docketNumber ?? "",
+    title: input.title,
+    caseType: input.caseType,
+    proceedingType: input.proceedingType,
+    status: input.status ?? "DRAFT",
+    judgeUserId: input.judgeUserId ?? "",
+    judgeName: input.judgeName ?? "",
+    plaintiff: input.plaintiff ?? "",
+    defendant: input.defendant ?? "",
+    individualsText: (input.individualsInvolved ?? []).join("\n"),
+    filedOn: input.filedOn ?? new Date().toISOString().slice(0, 10),
+    scheduledLocalDate: input.scheduledLocalDate ?? "",
+    scheduledLocalTime: input.scheduledLocalTime ?? "",
+    scheduledTimezone: input.scheduledTimezone ?? "America/New_York",
+    summaryMarkdown: input.summaryMarkdown ?? "",
+    publicNotesMarkdown: input.publicNotesMarkdown ?? "",
+    privateNotesMarkdown: input.privateNotesMarkdown ?? "",
+    linkedServiceRequestId: input.linkedServiceRequestId ?? "",
+    linkedPrivateTicketChannelId: input.linkedPrivateTicketChannelId ?? "",
+    linkedPetitionUrl: input.linkedPetitionUrl ?? "",
+    closedTicketTranscriptId: draft.transcript?.id ?? "",
+    closedTicketTranscriptLink: transcriptLink,
+    closedTicketTranscriptVisibility: draft.transcript?.visibility ?? "",
+    isPublic: Boolean(input.isPublic),
+    isArchived: Boolean(input.isArchived)
   };
 }
 
 function prefillFromRequest(detail: Awaited<ReturnType<typeof fetchAdminRequest>>["data"]): Partial<DocketFormState> {
   const payload = detail.payload;
   const caseMap: Record<string, { caseType: DocketCaseType; proceedingType: DocketProceedingType }> = {
-    CRIMINAL_TRIAL: { caseType: "CRIMINAL", proceedingType: "PRELIMINARY_HEARING" },
+    CRIMINAL_TRIAL: { caseType: "CRIMINAL", proceedingType: "PROBABLE_CAUSE_REVIEW" },
     CIVIL_CASE: { caseType: "CIVIL", proceedingType: "CIVIL_CASE_REVIEW" },
     SUBPOENA: { caseType: "SUBPOENA", proceedingType: "SUBPOENA_REVIEW" },
     ARREST_WARRANT: { caseType: "WARRANT", proceedingType: "WARRANT_REVIEW" },
@@ -4284,7 +4373,7 @@ function StaffRequestDetail({ me, loading }: { me: CurrentUserResponse | null; l
                     }}
                     className="min-w-0 rounded-md border border-gold/50 px-3 py-2 text-left font-semibold text-gold [overflow-wrap:anywhere]"
                   >
-                    Create docket entry from this request
+                    Draft docket entry from this request
                   </button>
                 ) : null}
                 <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} placeholder="Admin/staff note" className="min-w-0 rounded-md border border-white/10 bg-black px-3 py-2 [overflow-wrap:anywhere] outline-none focus:border-gold" />
