@@ -257,6 +257,11 @@ const commands = [
   lookupCommand("lookup-request", "Lookup a DOJ service request."),
   lookupCommand("lookup-docket", "Lookup a docket entry."),
   lookupCommand("lookup-bar-attempt", "Lookup a Bar Exam attempt. Reviewer/admin only."),
+  {
+    name: "repair-pd-access",
+    description: "Repair PD High Command access for an eligible criminal DOJ ticket.",
+    options: [stringOption("request_number", "CRT request number or internal request ID.", true)]
+  },
   ticketCommand("close", "Confirm, transcript, close, and delete a DOJ service request ticket.", false),
   ticketCommand("close-ticket", "Confirm, transcript, close, and delete a DOJ service request ticket.", true),
   ticketCommand("transcript-ticket", "Generate and store a private DOJ ticket transcript.", false),

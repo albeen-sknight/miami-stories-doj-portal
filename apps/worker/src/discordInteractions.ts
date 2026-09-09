@@ -20,7 +20,7 @@ import type {
 } from "@shotta-doj/shared";
 import { BAR_EXAM_ATTEMPT_STATUSES, DOCKET_CASE_TYPES, DOCKET_PROCEEDING_TYPES, DOCKET_STATUSES } from "@shotta-doj/shared";
 import { audit } from "./audit";
-import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, getServiceRequestDetailByTicketChannel, addServiceRequestEvent, closeServiceRequestTicketForContext, latestServiceRequestTicketClaim } from "./serviceRequests";
+import { archiveMappingKeyForServiceRequestType, createServiceRequestForContext, getServiceRequestDetail, getServiceRequestDetailByTicketChannel, addServiceRequestEvent, closeServiceRequestTicketForContext, ensurePdHighCommandAccessForCriminalTicket, latestServiceRequestTicketClaim } from "./serviceRequests";
 import { postLawyerSticky, postServiceRequestEmbedToPrivateTicket } from "./serviceDiscord";
 import { discordApi, fetchBotUser, fetchGuildMember, MissingEnvironmentError, requireEnv } from "./discord";
 import { CASE_TYPE_PREFIX, docketSuggestionFromRequest } from "./docketDefinitions";
@@ -656,7 +656,7 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
         [
           "**DOJ Staff Commands**",
           "`/create-docket`, `/lookup-request`, `/lookup-docket`, `/lookup-bar-attempt`",
-          "`/close`, `/close-ticket`, `/transcript-ticket`, `/delete-ticket`",
+          "`/close`, `/close-ticket`, `/transcript-ticket`, `/delete-ticket`, `/repair-pd-access`",
           "`/add-user`, `/add-role`, `/rename-ticket`, `/claim-ticket`, `/unclaim-ticket`",
           "`/create-channel`, `/create-private-channel`, `/create-category`, `/create-category-layout`",
           "`/delete-category-layout`, `/bulk-delete-channels`, `/announce`",
@@ -671,6 +671,8 @@ async function handleCommand(env: Env, ctx: AuthContext, interaction: DiscordInt
       return requestLawyer(env, ctx, options);
     case "request-service":
       return requestService(env, ctx, options);
+    case "repair-pd-access":
+      return repairPdAccessCommand(env, ctx, options);
     case "create-docket":
       return createDocketFromDiscord(env, ctx, options);
     case "create-channel":
@@ -788,6 +790,25 @@ async function requestService(env: Env, ctx: AuthContext, options: Map<string, O
   if (!result.ok) return messageResponse(result.message, true);
   const channel = result.data.discordTicketChannelId ? `\nChannel: ${discordChannelUrl(env, result.data.discordTicketChannelId)}` : "";
   return messageResponse(`Service request created: **${result.data.requestNumber}**${channel}`, true);
+}
+
+async function repairPdAccessCommand(env: Env, ctx: AuthContext, options: Map<string, OptionValue>) {
+  requireTicketManagement(ctx);
+  const requestNumber = stringOption(options, "request_number");
+  if (!requestNumber) return messageResponse("Request number or request ID is required.", true);
+  const detail = await getServiceRequestDetail(env, requestNumber);
+  if (!detail) return messageResponse(`No DOJ service request was found for **${requestNumber}**.`, true);
+  const result = await ensurePdHighCommandAccessForCriminalTicket(env, ctx, detail, "repair");
+  if (result.ok) {
+    const channel = `<#${result.channelId}>`;
+    return messageResponse(
+      result.status === "already_granted"
+        ? `PD High Command already has the required access on ${channel} for **${result.requestNumber}**.`
+        : `PD High Command access was repaired on ${channel} for **${result.requestNumber}**.`,
+      true
+    );
+  }
+  return messageResponse(result.message, true);
 }
 
 async function createDocketFromDiscord(env: Env, ctx: AuthContext, options: Map<string, OptionValue>) {

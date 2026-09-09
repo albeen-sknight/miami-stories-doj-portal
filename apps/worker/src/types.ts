@@ -20,6 +20,7 @@ export interface Env {
   MEMBER_LOG_CHANNEL_ID?: string;
   MUTE_ROLE_ID?: string;
   PROTECTED_DISCORD_CATEGORY_IDS?: string;
+  PD_HIGH_COMMAND_ROLE_ID?: string;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
 }

@@ -27,6 +27,11 @@ import { appendTranscriptSystemEvent, fetchChannelTranscriptEntries, transcriptS
 import type { AuthContext, Env } from "./types";
 
 const JSON_LIMIT = 16_000;
+const VIEW_CHANNEL = 1024n;
+const SEND_MESSAGES = 2048n;
+const EMBED_LINKS = 16384n;
+const ATTACH_FILES = 32768n;
+const READ_HISTORY = 65536n;
 const VALID_STATUSES: ServiceRequestStatus[] = [
   "SUBMITTED",
   "RECEIVED",
@@ -51,6 +56,10 @@ const SERVICE_PING_ROLE_NAMES: Partial<Record<ServiceRequestType, string[]>> = {
   DIVORCE: ["Judicial Branch"]
 };
 const PD_HIGH_COMMAND_ROLE_NAME = "PD High Command";
+const PD_HIGH_COMMAND_FALLBACK_ROLE_ID = "1531977170686316624";
+const PD_HIGH_COMMAND_GRANTED_EVENT = "PD_HIGH_COMMAND_AUTO_ACCESS_GRANTED";
+const PD_HIGH_COMMAND_SKIPPED_EVENT = "PD_HIGH_COMMAND_AUTO_ACCESS_SKIPPED";
+const PD_HIGH_COMMAND_ALLOW = VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | ATTACH_FILES | READ_HISTORY;
 const LAWYER_PROFILE_FIELDS = ["lawyerProfileId", "selectedLawyerId", "attorneyProfileId", "lawyerProfileSlug", "selectedLawyerSlug", "attorneyBarId", "lawyerBarId", "barNumber"];
 const LAWYER_DISCORD_ID_FIELDS = ["lawyerDiscordId", "attorneyDiscordId", "representativeDiscordId", "counselDiscordId"];
 const LAWYER_SUBTYPES: Record<string, string[]> = {
@@ -555,8 +564,11 @@ export async function closeServiceRequestTicketForContext(env: Env, ctx: AuthCon
 
 async function createDiscordTicket(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<ServiceRequestDetail> {
   try {
-    if (detail.discordTicketChannelId) return detail;
-    const pdHighCommandRoleId = await pdHighCommandAutoAccessRoleId(env, ctx, detail);
+    if (detail.discordTicketChannelId) {
+      await ensurePdHighCommandAccessForCriminalTicket(env, ctx, detail, "channel_repair");
+      return (await getServiceRequestDetail(env, detail.id)) ?? detail;
+    }
+    const pdHighCommandRoleId = await pdHighCommandAutoAccessRoleId(env, ctx, detail, "channel_create");
     const roleIds = await accessRoleIds(env, detail, pdHighCommandRoleId ? [pdHighCommandRoleId] : []);
     const channel = await createServiceRequestTicketChannel(env, detail, {
       categoryId: detail.discordTicketCategoryId ?? "",
@@ -578,7 +590,7 @@ async function createDiscordTicket(env: Env, ctx: AuthContext, detail: ServiceRe
       primaryError: "primaryError" in channel ? channel.primaryError : null
     });
     if (pdHighCommandRoleId) {
-      await recordPdHighCommandAutoAccess(env, ctx, detail, channel.id, pdHighCommandRoleId);
+      await ensurePdHighCommandAccessForCriminalTicket(env, ctx, detail, "channel_create", channel.id, pdHighCommandRoleId);
     }
     await audit(env, "SERVICE_REQUEST_PRIVATE_CHANNEL_CREATED", { request_id: detail.id, channel_id: channel.id }, ctx.user.id);
   } catch (cause) {
@@ -882,8 +894,87 @@ async function accessRoleIds(env: Env, detail: ServiceRequestDetail, extraRoleId
   return [...new Set([...base, ...selected, ...extraRoleIds].filter(validDiscordId))];
 }
 
-async function pdHighCommandAutoAccessRoleId(env: Env, ctx: AuthContext, detail: ServiceRequestDetail): Promise<string | null> {
-  if (detail.requestType !== "CRIMINAL_TRIAL") return null;
+type PdHighCommandAccessSource = "channel_create" | "channel_repair" | "repair";
+
+export type PdHighCommandAutoAccessResult =
+  | { ok: true; status: "granted" | "already_granted"; requestNumber: string; channelId: string; roleId: string }
+  | { ok: false; status: "not_applicable" | "missing_channel" | "requester_without_role" | "member_lookup_failed" | "discord_error"; message: string; requestNumber: string; channelId?: string | null; roleId?: string };
+
+export async function ensurePdHighCommandAccessForCriminalTicket(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  source: PdHighCommandAccessSource = "channel_repair",
+  channelId = detail.discordTicketChannelId,
+  roleIdHint?: string | null
+): Promise<PdHighCommandAutoAccessResult> {
+  if (!isPdHighCommandCriminalTicket(detail)) {
+    return {
+      ok: false,
+      status: "not_applicable",
+      requestNumber: detail.requestNumber,
+      message: "PD High Command auto access only applies to criminal trial / preliminary probable-cause review tickets."
+    };
+  }
+  if (!validDiscordId(channelId)) {
+    return {
+      ok: false,
+      status: "missing_channel",
+      requestNumber: detail.requestNumber,
+      channelId,
+      message: "This request does not have a valid private Discord ticket channel to repair."
+    };
+  }
+  const roleId = validDiscordId(roleIdHint) ? roleIdHint : await pdHighCommandRoleId(env);
+  const requesterCheck = await requesterHasPdHighCommandRole(env, ctx, detail, roleId, source, channelId);
+  if (!requesterCheck.ok) {
+    return {
+      ok: false,
+      status: requesterCheck.status,
+      requestNumber: detail.requestNumber,
+      channelId,
+      roleId,
+      message: requesterCheck.message
+    };
+  }
+  const result = await putMergedChannelRoleOverwrite(env, detail, channelId, roleId, source);
+  if (!result.ok) {
+    await recordPdHighCommandAutoAccessSkipped(env, ctx, detail, source, {
+      channel_id: channelId,
+      role_id: roleId,
+      requester_discord_id: requesterCheck.requesterDiscordId,
+      reason: result.message
+    });
+    return {
+      ok: false,
+      status: "discord_error",
+      requestNumber: detail.requestNumber,
+      channelId,
+      roleId,
+      message: result.message
+    };
+  }
+  if (!result.alreadyGranted || source === "channel_create") {
+    await recordPdHighCommandAutoAccessGranted(env, ctx, detail, channelId, roleId, source, result.alreadyGranted);
+  }
+  return {
+    ok: true,
+    status: result.alreadyGranted ? "already_granted" : "granted",
+    requestNumber: detail.requestNumber,
+    channelId,
+    roleId
+  };
+}
+
+async function pdHighCommandAutoAccessRoleId(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, source: PdHighCommandAccessSource): Promise<string | null> {
+  if (!isPdHighCommandCriminalTicket(detail)) return null;
+  const roleId = await pdHighCommandRoleId(env);
+  const requesterCheck = await requesterHasPdHighCommandRole(env, ctx, detail, roleId, source, detail.discordTicketChannelId);
+  return requesterCheck.ok ? roleId : null;
+}
+
+async function pdHighCommandRoleId(env: Env): Promise<string> {
+  if (validDiscordId(env.PD_HIGH_COMMAND_ROLE_ID)) return env.PD_HIGH_COMMAND_ROLE_ID;
   const row = await env.DB!.prepare(
     `SELECT discord_role_id as id
      FROM role_mappings
@@ -895,26 +986,125 @@ async function pdHighCommandAutoAccessRoleId(env: Env, ctx: AuthContext, detail:
   )
     .bind(PD_HIGH_COMMAND_ROLE_NAME)
     .first<{ id: string | null }>();
-  const roleId = row?.id ?? null;
-  if (!validDiscordId(roleId)) return null;
-  if (ctx.roles.some((role) => role.discordRoleId === roleId)) return roleId;
+  return validDiscordId(row?.id) ? row.id : PD_HIGH_COMMAND_FALLBACK_ROLE_ID;
+}
+
+async function requesterHasPdHighCommandRole(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  roleId: string,
+  source: PdHighCommandAccessSource,
+  channelId?: string | null
+): Promise<{ ok: true; requesterDiscordId: string } | { ok: false; status: "requester_without_role" | "member_lookup_failed"; message: string }> {
+  const requesterDiscordId = validDiscordId(detail.requesterDiscordId)
+    ? detail.requesterDiscordId
+    : validDiscordId(ctx.user.discordId)
+      ? ctx.user.discordId
+      : "";
+  if (!validDiscordId(requesterDiscordId)) {
+    await recordPdHighCommandAutoAccessSkipped(env, ctx, detail, source, {
+      channel_id: channelId ?? null,
+      role_id: roleId,
+      requester_discord_id: null,
+      reason: "missing_requester_discord_id"
+    });
+    return { ok: false, status: "member_lookup_failed", message: "The requester's Discord ID is missing, so PD High Command access could not be verified." };
+  }
+  if (ctx.user.discordId === requesterDiscordId && ctx.roles.some((role) => role.discordRoleId === roleId)) {
+    return { ok: true, requesterDiscordId };
+  }
   try {
-    const member = await fetchGuildMember(env, ctx.user.discordId);
-    return member?.roles.includes(roleId) ? roleId : null;
+    const member = await fetchGuildMember(env, requesterDiscordId);
+    if (member?.roles.includes(roleId)) return { ok: true, requesterDiscordId };
+    await recordPdHighCommandAutoAccessSkipped(env, ctx, detail, source, {
+      channel_id: channelId ?? null,
+      role_id: roleId,
+      requester_discord_id: requesterDiscordId,
+      reason: "requester_without_pd_high_command_role"
+    });
+    return { ok: false, status: "requester_without_role", message: `Requester ${requesterDiscordId} does not currently have PD High Command role ${roleId}.` };
   } catch (cause) {
-    console.warn(JSON.stringify({
-      event: "pd_high_command_role_check_failed",
-      requestId: detail.id,
-      actorUserId: ctx.user.id,
-      cause: safeError(cause)
-    }));
-    return null;
+    await recordPdHighCommandAutoAccessSkipped(env, ctx, detail, source, {
+      channel_id: channelId ?? null,
+      role_id: roleId,
+      requester_discord_id: requesterDiscordId,
+      reason: safeError(cause)
+    });
+    return { ok: false, status: "member_lookup_failed", message: `Discord member lookup failed for requester ${requesterDiscordId}: ${safeError(cause)}` };
   }
 }
 
-async function recordPdHighCommandAutoAccess(env: Env, ctx: AuthContext, detail: ServiceRequestDetail, channelId: string, roleId: string): Promise<void> {
-  const message = "PD High Command access was automatically added to this criminal court ticket because the requester has the PD High Command role.";
+async function putMergedChannelRoleOverwrite(
+  env: Env,
+  detail: ServiceRequestDetail,
+  channelId: string,
+  roleId: string,
+  source: PdHighCommandAccessSource
+): Promise<{ ok: true; alreadyGranted: boolean } | { ok: false; message: string }> {
   try {
+    const channel = await fetchDiscordTicketChannel(env, channelId);
+    const existing = (channel.permission_overwrites ?? []).find((overwrite) => overwrite.id === roleId && overwrite.type === 0);
+    const currentAllow = permissionBits(existing?.allow);
+    const currentDeny = permissionBits(existing?.deny);
+    const alreadyGranted = (currentAllow & PD_HIGH_COMMAND_ALLOW) === PD_HIGH_COMMAND_ALLOW && (currentDeny & PD_HIGH_COMMAND_ALLOW) === 0n;
+    if (alreadyGranted) return { ok: true, alreadyGranted: true };
+    const nextAllow = currentAllow | PD_HIGH_COMMAND_ALLOW;
+    const nextDeny = currentDeny & ~PD_HIGH_COMMAND_ALLOW;
+    const response = await discordApi(env, `/channels/${channelId}/permissions/${roleId}`, {
+      method: "PUT",
+      body: JSON.stringify({ type: 0, allow: nextAllow.toString(), deny: nextDeny.toString() })
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      return { ok: false, message: `Discord permission overwrite failed with ${response.status}: ${text.slice(0, 180)}` };
+    }
+    return { ok: true, alreadyGranted: false };
+  } catch (cause) {
+    console.warn(JSON.stringify({
+      event: "pd_high_command_auto_access_overwrite_failed",
+      requestId: detail.id,
+      requestNumber: detail.requestNumber,
+      channelId,
+      roleId,
+      source,
+      cause: safeError(cause)
+    }));
+    return { ok: false, message: safeError(cause) };
+  }
+}
+
+async function fetchDiscordTicketChannel(env: Env, channelId: string): Promise<{ id: string; permission_overwrites?: Array<{ id: string; type: 0 | 1; allow?: string; deny?: string }> }> {
+  const response = await discordApi(env, `/channels/${channelId}`);
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Discord channel lookup failed with ${response.status}: ${text.slice(0, 180)}`);
+  }
+  return await response.json() as { id: string; permission_overwrites?: Array<{ id: string; type: 0 | 1; allow?: string; deny?: string }> };
+}
+
+async function recordPdHighCommandAutoAccessGranted(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  channelId: string,
+  roleId: string,
+  source: PdHighCommandAccessSource,
+  alreadyPresent: boolean
+): Promise<void> {
+  const message = "PD High Command access was automatically granted because the requester has the PD High Command role.";
+  const metadata = {
+    request_number: detail.requestNumber,
+    request_id: detail.id,
+    channel_id: channelId,
+    role_id: roleId,
+    reason: "opener_has_pd_high_command_role",
+    source,
+    already_present: alreadyPresent
+  };
+  try {
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, PD_HIGH_COMMAND_GRANTED_EVENT, message, metadata);
+    await audit(env, "SERVICE_REQUEST_PD_HIGH_COMMAND_AUTO_ACCESS_GRANTED", metadata, ctx.user.id);
     const response = await discordApi(env, `/channels/${channelId}/messages`, {
       method: "POST",
       body: JSON.stringify({
@@ -922,25 +1112,91 @@ async function recordPdHighCommandAutoAccess(env: Env, ctx: AuthContext, detail:
         allowed_mentions: { parse: [] }
       })
     });
-    if (!response.ok) throw new Error(`Discord PD High Command note failed with ${response.status}`);
-    await addServiceRequestEvent(env, detail.id, ctx.user.id, "PD_HIGH_COMMAND_AUTO_ADDED", message, {
-      channel_id: channelId,
-      role_id: roleId,
-      request_type: detail.requestType
-    });
-    await audit(env, "SERVICE_REQUEST_PD_HIGH_COMMAND_AUTO_ADDED", { request_id: detail.id, channel_id: channelId, role_id: roleId }, ctx.user.id);
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.warn(JSON.stringify({
+        event: "pd_high_command_auto_access_note_failed",
+        requestId: detail.id,
+        channelId,
+        roleId,
+        source,
+        status: response.status,
+        response: text.slice(0, 180)
+      }));
+    }
   } catch (cause) {
-    await addServiceRequestEvent(env, detail.id, ctx.user.id, "PD_HIGH_COMMAND_AUTO_ADD_NOTE_FAILED", "PD High Command overwrite was selected, but the private ticket note could not be posted.", {
-      channel_id: channelId,
-      role_id: roleId,
-      reason: safeError(cause)
-    });
     console.warn(JSON.stringify({
-      event: "pd_high_command_auto_access_note_failed",
+      event: "pd_high_command_auto_access_grant_log_failed",
       requestId: detail.id,
       channelId,
+      roleId,
+      source,
       cause: safeError(cause)
     }));
+  }
+}
+
+async function recordPdHighCommandAutoAccessSkipped(
+  env: Env,
+  ctx: AuthContext,
+  detail: ServiceRequestDetail,
+  source: PdHighCommandAccessSource,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  try {
+    await addServiceRequestEvent(env, detail.id, ctx.user.id, PD_HIGH_COMMAND_SKIPPED_EVENT, "PD High Command auto access was skipped.", {
+      request_number: detail.requestNumber,
+      request_id: detail.id,
+      source,
+      ...metadata
+    });
+    await audit(env, "SERVICE_REQUEST_PD_HIGH_COMMAND_AUTO_ACCESS_SKIPPED", {
+      request_id: detail.id,
+      request_number: detail.requestNumber,
+      source,
+      ...metadata
+    }, ctx.user.id);
+  } catch (cause) {
+    console.warn(JSON.stringify({
+      event: "pd_high_command_auto_access_skip_log_failed",
+      requestId: detail.id,
+      source,
+      cause: safeError(cause)
+    }));
+  }
+}
+
+function isPdHighCommandCriminalTicket(detail: ServiceRequestDetail): boolean {
+  if (detail.requestType === "LAWYER" || detail.requestType === "GENERAL") return false;
+  if (detail.requestType === "CRIMINAL_TRIAL") return true;
+  const markers = [
+    detail.requestType,
+    readString(detail.payload, "criminalRequestType"),
+    readString(detail.payload, "proceedingType"),
+    readString(detail.payload, "requestSubtype"),
+    readString(detail.payload, "requestType"),
+    readString(detail.payload, "serviceType"),
+    readString(detail.payload, "caseType")
+  ].map(normalizePdHighCommandMarker).filter(Boolean);
+  return markers.some((marker) =>
+    marker.includes("CRIMINALTRIAL") ||
+    marker.includes("CRIMINALCOURT") ||
+    marker.includes("PRELIMINARYPROBABLECAUSEREVIEW") ||
+    marker.includes("PROBABLECAUSEREVIEW") ||
+    marker.includes("PRELIMINARYPCREVIEW") ||
+    marker === "PCREVIEW"
+  );
+}
+
+function normalizePdHighCommandMarker(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function permissionBits(value: string | undefined): bigint {
+  try {
+    return BigInt(value ?? "0");
+  } catch {
+    return 0n;
   }
 }
 

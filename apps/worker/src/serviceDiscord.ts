@@ -7,6 +7,7 @@ const VIEW_CHANNEL = 1024n;
 const SEND_MESSAGES = 2048n;
 const MANAGE_MESSAGES = 8192n;
 const EMBED_LINKS = 16384n;
+const ATTACH_FILES = 32768n;
 const READ_HISTORY = 65536n;
 const MANAGE_CHANNELS = 16n;
 const MANAGE_ROLES = 268435456n;
@@ -138,7 +139,7 @@ export async function createServiceRequestTicketChannel(env: Env, request: Servi
   }
   const existing = findExistingTicketChannel(channels, config.categoryId, name);
   if (existing) return existing;
-  const allow = (VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | READ_HISTORY).toString();
+  const allow = (VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | ATTACH_FILES | READ_HISTORY).toString();
   const botAllow = (VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS | READ_HISTORY | MANAGE_CHANNELS | MANAGE_ROLES).toString();
   const roles = await fetchGuildRoles(env, guildId, actionContext);
   const botMember = await fetchGuildMember(env, guildId, botUser.id, actionContext);
